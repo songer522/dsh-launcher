@@ -47,23 +47,12 @@ tints it for light and dark menu bars. It shows server state at a glance —
 **solid** when running, **dimmed** when stopped — and everything is one click
 away:
 
-```
-  🐳 ← status icon (solid = running, dimmed = stopped)
-  ┌────────────────────────┐
-  │ Running on port 3080   │
-  │ PID 98948              │
-  ├────────────────────────┤
-  │ Open in Browser    ⌘O  │
-  │ Restart Server     ⌘R  │
-  │ Stop Server…           │
-  ├────────────────────────┤
-  │ Show Panel             │
-  │ Open Log           ⌘L  │
-  │ Preferences…       ⌘,  │
-  ├────────────────────────┤
-  │ Quit DSH Launcher  ⌘Q  │
-  └────────────────────────┘
-```
+<p align="center">
+  <img src="docs/menubar.png" alt="DSH Launcher menu open in the macOS menu bar, showing server status and actions" width="360">
+</p>
+
+The two dimmed lines at the top are status, not actions: server state
+(**Starting…**, **Running on port 3080**, or **Stopped**) and the PID.
 
 When the server is stopped, the menu shows **Start Server** instead.
 
