@@ -1,7 +1,9 @@
 # DSH Launcher
 
-A tiny macOS menu-less control panel for a local development server: start it,
+A tiny macOS **menu bar** utility for a local development server: start it,
 open it in your browser, restart it, or stop it — without touching a terminal.
+
+It lives in the status bar with no Dock icon, so it stays out of your way.
 
 Written for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 (`pnpm dsh web`), but the command, port, project folder and browser are all
@@ -9,21 +11,48 @@ configurable, so it works for any long-running local server.
 
 Native AppKit, single Swift file, **no dependencies**.
 
+### Menu bar
+
+The status icon shows server state at a glance — **filled** when running,
+**outline** when stopped — and everything is one click away:
+
+```
+  ●  ← status icon
+  ┌────────────────────────┐
+  │ Running on port 3080   │
+  │ PID 98948              │
+  ├────────────────────────┤
+  │ Open in Browser    ⌘O  │
+  │ Restart Server     ⌘R  │
+  │ Stop Server…           │
+  ├────────────────────────┤
+  │ Show Panel             │
+  │ Open Log           ⌘L  │
+  │ Preferences…       ⌘,  │
+  ├────────────────────────┤
+  │ Quit DSH Launcher  ⌘Q  │
+  └────────────────────────┘
+```
+
+When the server is stopped, the menu shows **Start Server** instead.
+
+State is polled every 3 seconds, so the icon stays correct even when you start
+or stop the server from a terminal.
+
+### Panel (optional)
+
+**Show Panel** opens a small window with the same actions:
+
 ```
   ● ● ●   DSH Launcher
-
-  DSH Launcher
 
   🟢 Running on port 3080
      PID 98948 · node --import tsx/esm apps/cli/src/bin.ts web
 
   [ Open in Browser ]   [ Restart ]   [ Stop Server ]
-
-  Port 3080 · /tmp/dsh-web.log
 ```
 
-When the server is not running, the panel shows a single **Start Server**
-button instead.
+Closing the panel does **not** quit the app — it stays in the menu bar.
 
 ## Install
 
@@ -80,9 +109,14 @@ what lets you use Chrome while Safari remains your system default.
 
 ## Window behaviour
 
+The app is a menu bar utility (`LSUIElement`), so it has **no Dock icon** and no
+⌘Tab entry. Quit it from the menu bar.
+
+For the optional panel:
+
 | Control | State |
 |---|---|
-| Close (red) | enabled — quits the panel, **leaves the server running** |
+| Close (red) | enabled — hides the panel; app stays in the menu bar |
 | Minimize (yellow) | enabled |
 | Zoom / fullscreen (green) | disabled — fixed-size panel |
 

@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] — 2026-09-08
+
+Reworked from a windowed app into a menu bar utility.
+
+### Added
+
+- **Menu bar status item.** The app now lives in the status bar. The icon is a
+  template image (so it tints correctly in light and dark menu bars) and
+  reflects state: filled when the server is running, outline when stopped.
+- **Dropdown menu** with the full action set — Start / Open in Browser /
+  Restart / Stop, plus Show Panel, Open Log, Preferences and Quit — with live
+  status and PID shown at the top. The menu is rebuilt on open, so it can never
+  display stale state.
+- **Background polling** every 3 seconds, so the icon stays correct when the
+  server is started or stopped outside the app (from a terminal, say).
+- `LauncherController`, a single owner of config and server state shared by the
+  menu and the panel, so the two views cannot disagree.
+
+### Changed
+
+- **No Dock icon.** The app runs as an accessory (`LSUIElement` plus
+  `.accessory` activation policy), so it no longer appears in the Dock or in
+  ⌘Tab. Quit from the menu bar.
+- The window is now an optional panel opened via **Show Panel**, not the main
+  interface, and no window is shown at launch.
+- Closing the panel no longer quits the app; it stays in the menu bar.
+  (`applicationShouldTerminateAfterLastWindowClosed` returns `false`.)
+
 ## [1.0.0] — 2026-09-08
 
 First standalone release, extracted from a personal `tools/` folder into its
@@ -41,4 +69,5 @@ own project.
   Chrome and other apps were in range. All probes now use `-sTCP:LISTEN`, which
   matches only the listening server.
 
+[1.1.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.0.0

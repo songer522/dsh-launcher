@@ -16,7 +16,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="DSH Launcher"
 BUNDLE_ID="io.github.dsh-launcher"
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 if [ "${1:-}" = "--uninstall" ]; then
     pkill -f "$APP_NAME.app/Contents/MacOS/DSHLauncher" 2>/dev/null || true
@@ -65,6 +65,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- Menu bar utility: no Dock icon and no Cmd-Tab entry. The status item is
+       the app; closing the panel leaves it running in the menu bar. -->
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST

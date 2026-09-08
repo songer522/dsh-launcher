@@ -209,22 +209,207 @@ enum Server {
     }
 }
 
+// MARK: - Shared controller
+//
+// One owner of config + state, shared by the status item and the window, so the
+// two views can never disagree about whether the server is running.
+
+final class LauncherController {
+    static let shared = LauncherController()
+
+    var config = Config.load()
+    private(set) var runningPID: String?
+    private(set) var busy = false
+    private(set) var busyMessage = ""
+
+    /// Observers notified whenever state changes (menu + window redraw).
+    private var observers: [() -> Void] = []
+    private var pollTimer: Timer?
+
+    func addObserver(_ block: @escaping () -> Void) { observers.append(block) }
+
+    private func notify() {
+        DispatchQueue.main.async { self.observers.forEach { $0() } }
+    }
+
+    var isRunning: Bool { runningPID != nil }
+
+    var statusText: String {
+        if busy { return busyMessage }
+        return isRunning ? "Running on port \(config.port)" : "Not running"
+    }
+
+    var detailText: String {
+        if busy { return "" }
+        if let pid = runningPID { return "PID \(pid) · \(Server.describe(pid: pid))" }
+        if !config.repoExists { return "⚠︎ Project folder not found — see Preferences" }
+        return "Press Start to launch the server."
+    }
+
+    /// Re-read server state. Cheap (one lsof), so it is safe to poll.
+    func refresh() {
+        let pid = Server.listenerPID(port: config.port)
+        if pid != runningPID {
+            runningPID = pid
+            notify()
+        }
+    }
+
+    /// Poll in the background so the menu bar icon stays honest even when the
+    /// server is started or stopped from a terminal.
+    func startPolling() {
+        pollTimer?.invalidate()
+        let timer = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
+            guard let self, !self.busy else { return }
+            DispatchQueue.global(qos: .utility).async { self.refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+        DispatchQueue.global(qos: .utility).async { self.refresh() }
+    }
+
+    private func setBusy(_ value: Bool, _ message: String = "") {
+        busy = value
+        busyMessage = message
+        notify()
+    }
+
+    // MARK: Actions
+
+    func openBrowser() { Server.openBrowser(config: config) }
+
+    func start(completion: ((Bool) -> Void)? = nil) {
+        guard config.repoExists else {
+            Alerts.warn("Project folder not found:\n\(config.repo)",
+                        detail: "Set the correct path in Preferences (⌘,).")
+            completion?(false)
+            return
+        }
+        setBusy(true, "Starting…")
+        let cfg = config
+        DispatchQueue.global().async {
+            Server.start(config: cfg)
+            let ready = Server.waitUntilReady(port: cfg.port)
+            if ready {
+                Thread.sleep(forTimeInterval: 0.6)   // let HTTP finish binding
+                Server.openBrowser(config: cfg)
+            }
+            self.refresh()
+            DispatchQueue.main.async {
+                self.setBusy(false)
+                self.refresh()
+                if !ready {
+                    Alerts.warn("The server did not start in time.",
+                                detail: "Check the log:\n\(cfg.logFile)")
+                }
+                completion?(ready)
+            }
+        }
+    }
+
+    func restart() {
+        guard let pid = runningPID ?? Server.listenerPID(port: config.port) else { refresh(); return }
+        setBusy(true, "Restarting…")
+        let cfg = config
+        DispatchQueue.global().async {
+            Server.stop(pid: pid, port: cfg.port)
+            DispatchQueue.main.async { self.setBusy(false); self.start() }
+        }
+    }
+
+    /// `confirm` is false when the caller already asked (menu bar path).
+    func stop(confirm: Bool = true) {
+        guard let pid = runningPID ?? Server.listenerPID(port: config.port) else { refresh(); return }
+
+        if confirm {
+            // A running server may be hosting live sessions — never stop silently.
+            let alert = NSAlert()
+            alert.messageText = "Stop the server?"
+            alert.informativeText = "PID \(pid) will be terminated.\n"
+                + "Anything connected in the browser will disconnect."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Stop Server")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+
+        setBusy(true, "Stopping…")
+        let cfg = config
+        DispatchQueue.global().async {
+            let ok = Server.stop(pid: pid, port: cfg.port)
+            self.refresh()
+            DispatchQueue.main.async {
+                self.setBusy(false)
+                self.refresh()
+                if !ok {
+                    Alerts.warn("Could not stop PID \(pid).",
+                                detail: "Try again, or stop it from a terminal.")
+                }
+            }
+        }
+    }
+
+    func openLog() {
+        if !FileManager.default.fileExists(atPath: config.logFile) {
+            FileManager.default.createFile(atPath: config.logFile, contents: Data())
+        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: config.logFile))
+    }
+}
+
+enum Alerts {
+    static func warn(_ text: String, detail: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = text
+        a.informativeText = detail
+        a.alertStyle = .warning
+        a.runModal()
+    }
+}
+
+// MARK: - Status bar icon
+//
+// Drawn in code as a template image so macOS tints it correctly for light and
+// dark menu bars, and for the highlighted state when the menu is open.
+
+enum StatusIcon {
+    static func image(running: Bool) -> NSImage {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size, flipped: false) { rect in
+            let inset = rect.insetBy(dx: 3.0, dy: 3.0)
+            let path = NSBezierPath(ovalIn: inset)
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+            path.lineWidth = 1.6
+            if running {
+                path.fill()          // filled = running
+            } else {
+                path.stroke()        // outline = stopped
+            }
+            return true
+        }
+        image.isTemplate = true      // let AppKit handle menu-bar tinting
+        return image
+    }
+}
+
 // MARK: - Main window
 
 final class LauncherWindow: NSWindow {
-    private var config = Config.load()
+    private let controller = LauncherController.shared
 
     private let statusDot = NSTextField(labelWithString: "")
     private let statusLine = NSTextField(labelWithString: "")
     private let detailLine = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
+    private let hint = NSTextField(labelWithString: "")
 
     private let startButton = NSButton()
     private let openButton = NSButton()
     private let restartButton = NSButton()
     private let stopButton = NSButton()
-
-    private var busy = false
 
     init() {
         super.init(
@@ -239,11 +424,11 @@ final class LauncherWindow: NSWindow {
         title = "DSH Launcher"
         isReleasedWhenClosed = false
         center()
-        // Also refuse fullscreen explicitly, so ⌃⌘F does nothing.
         collectionBehavior.insert(.fullScreenNone)
 
         buildLayout()
-        refresh()
+        controller.addObserver { [weak self] in self?.render() }
+        render()
     }
 
     private func buildLayout() {
@@ -286,129 +471,55 @@ final class LauncherWindow: NSWindow {
 
         style(startButton, "Start Server", 24, 200, key: "\r")
         startButton.action = #selector(startTapped)
-
         style(openButton, "Open in Browser", 24, 190, key: "\r")
         openButton.action = #selector(openTapped)
-
         style(restartButton, "Restart", 222, 106)
         restartButton.action = #selector(restartTapped)
-
         style(stopButton, "Stop Server", 336, 110)
         stopButton.action = #selector(stopTapped)
 
-        let hint = NSTextField(labelWithString: "")
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = .tertiaryLabelColor
         hint.frame = NSRect(x: 24, y: 34, width: 420, height: 14)
-        hint.stringValue = "Port \(config.port) · \(config.logFile)"
         hint.lineBreakMode = .byTruncatingMiddle
         content.addSubview(hint)
     }
 
-    // MARK: State
+    func render() {
+        let c = controller
+        let running = c.isRunning
 
-    func refresh() {
-        guard !busy else { return }
-        let pid = Server.listenerPID(port: config.port)
-        let running = pid != nil
+        statusDot.stringValue = c.busy ? "🟡" : (running ? "🟢" : "⚪️")
+        statusLine.stringValue = c.statusText
+        detailLine.stringValue = c.detailText
+        hint.stringValue = "Port \(c.config.port) · \(c.config.logFile)"
 
-        statusDot.stringValue = running ? "🟢" : "⚪️"
-        statusLine.stringValue = running ? "Running on port \(config.port)" : "Not running"
-
-        if let pid {
-            detailLine.stringValue = "PID \(pid) · \(Server.describe(pid: pid))"
-        } else if !config.repoExists {
-            detailLine.stringValue = "⚠︎ Project folder not found — see Preferences"
-        } else {
-            detailLine.stringValue = "Press Start to launch the server."
-        }
+        c.busy ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
 
         startButton.isHidden = running
         openButton.isHidden = !running
         restartButton.isHidden = !running
         stopButton.isHidden = !running
-        startButton.isEnabled = config.repoExists
+        for b in [startButton, openButton, restartButton, stopButton] { b.isEnabled = !c.busy }
+        startButton.isEnabled = !c.busy && c.config.repoExists
     }
 
-    private func setBusy(_ value: Bool, _ message: String? = nil) {
-        busy = value
-        value ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
-        if let message {
-            statusDot.stringValue = "🟡"
-            statusLine.stringValue = message
-            detailLine.stringValue = ""
-        }
-        for b in [startButton, openButton, restartButton, stopButton] { b.isEnabled = !value }
-    }
+    @objc private func openTapped()    { controller.openBrowser() }
+    @objc private func startTapped()   { controller.start() }
+    @objc private func restartTapped() { controller.restart() }
+    @objc private func stopTapped()    { controller.stop() }
 
-    // MARK: Actions
+    @objc func showPreferences() { PreferencesPanel.show(controller: controller) }
+    @objc func openLog()         { controller.openLog() }
+}
 
-    @objc private func openTapped() { Server.openBrowser(config: config) }
+// MARK: - Preferences
 
-    @objc private func startTapped() {
-        guard config.repoExists else {
-            warn("Project folder not found:\n\(config.repo)",
-                 detail: "Set the correct path in Preferences (⌘,).")
-            return
-        }
-        setBusy(true, "Starting…")
-        let cfg = config
-        DispatchQueue.global().async {
-            Server.start(config: cfg)
-            let ready = Server.waitUntilReady(port: cfg.port)
-            if ready {
-                Thread.sleep(forTimeInterval: 0.6)   // let HTTP finish binding
-                Server.openBrowser(config: cfg)
-            }
-            DispatchQueue.main.async {
-                self.setBusy(false)
-                self.refresh()
-                if !ready {
-                    self.warn("The server did not start in time.",
-                              detail: "Check the log:\n\(cfg.logFile)")
-                }
-            }
-        }
-    }
+enum PreferencesPanel {
+    static func show(controller: LauncherController) {
+        NSApp.activate(ignoringOtherApps: true)
+        let config = controller.config
 
-    @objc private func restartTapped() {
-        guard let pid = Server.listenerPID(port: config.port) else { refresh(); return }
-        setBusy(true, "Restarting…")
-        let cfg = config
-        DispatchQueue.global().async {
-            Server.stop(pid: pid, port: cfg.port)
-            DispatchQueue.main.async { self.setBusy(false); self.startTapped() }
-        }
-    }
-
-    @objc private func stopTapped() {
-        guard let pid = Server.listenerPID(port: config.port) else { refresh(); return }
-
-        // Explicit confirmation: the server may be hosting live sessions.
-        let alert = NSAlert()
-        alert.messageText = "Stop the server?"
-        alert.informativeText = "PID \(pid) will be terminated.\n"
-            + "Anything connected in the browser will disconnect."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Stop Server")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        setBusy(true, "Stopping…")
-        let cfg = config
-        DispatchQueue.global().async {
-            let ok = Server.stop(pid: pid, port: cfg.port)
-            DispatchQueue.main.async {
-                self.setBusy(false)
-                self.refresh()
-                if !ok { self.warn("Could not stop PID \(pid).", detail: "Try again, or stop it from a terminal.") }
-            }
-        }
-    }
-
-    // MARK: Preferences
-
-    @objc func showPreferences() {
         let alert = NSAlert()
         alert.messageText = "Preferences"
         alert.informativeText = "Settings are stored in:\n\(Config.configURL.path)"
@@ -442,81 +553,127 @@ final class LauncherWindow: NSWindow {
 
         let response = alert.runModal()
         if response == .alertThirdButtonReturn {
-            config.save()   // ensure it exists before revealing
+            controller.config.save()
             NSWorkspace.shared.activateFileViewerSelecting([Config.configURL])
             return
         }
         guard response == .alertFirstButtonReturn else { return }
 
-        config.repo = repoField.stringValue.trimmingCharacters(in: .whitespaces)
-        config.command = commandField.stringValue.trimmingCharacters(in: .whitespaces)
-        config.port = portField.stringValue.trimmingCharacters(in: .whitespaces)
-        config.browser = browserField.stringValue.trimmingCharacters(in: .whitespaces)
-        config.save()
-        refresh()
-    }
-
-    @objc func openLog() {
-        if !FileManager.default.fileExists(atPath: config.logFile) {
-            FileManager.default.createFile(atPath: config.logFile, contents: Data())
-        }
-        NSWorkspace.shared.open(URL(fileURLWithPath: config.logFile))
-    }
-
-    private func warn(_ text: String, detail: String) {
-        let a = NSAlert()
-        a.messageText = text
-        a.informativeText = detail
-        a.alertStyle = .warning
-        a.runModal()
+        var updated = controller.config
+        updated.repo = repoField.stringValue.trimmingCharacters(in: .whitespaces)
+        updated.command = commandField.stringValue.trimmingCharacters(in: .whitespaces)
+        updated.port = portField.stringValue.trimmingCharacters(in: .whitespaces)
+        updated.browser = browserField.stringValue.trimmingCharacters(in: .whitespaces)
+        updated.save()
+        controller.config = updated
+        controller.refresh()
     }
 }
 
 // MARK: - App delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-    var window: LauncherWindow!
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    private let controller = LauncherController.shared
+    private var statusItem: NSStatusItem!
+    private var window: LauncherWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        buildMenu()
-        window = LauncherWindow()
-        window.delegate = self
-        window.makeKeyAndOrderFront(nil)
+        buildStatusItem()
+        controller.addObserver { [weak self] in self?.updateStatusIcon() }
+        controller.startPolling()
+        updateStatusIcon()
+        // Menu bar utility: no Dock icon, no window on launch. The status item
+        // is the app. (LSUIElement in Info.plist does the same at load time;
+        // this keeps the behaviour explicit in code too.)
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    // MARK: Status item
+
+    private func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.button?.image = StatusIcon.image(running: false)
+        statusItem.button?.toolTip = "DSH Launcher"
+        let menu = NSMenu()
+        menu.delegate = self          // rebuild each time it opens
+        statusItem.menu = menu
+    }
+
+    private func updateStatusIcon() {
+        statusItem?.button?.image = StatusIcon.image(running: controller.isRunning)
+        statusItem?.button?.toolTip = "DSH Launcher — \(controller.statusText)"
+    }
+
+    /// Rebuild the menu on open so it always shows current state.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        controller.refresh()
+        menu.removeAllItems()
+
+        let status = NSMenuItem(title: controller.statusText, action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        menu.addItem(status)
+
+        if let pid = controller.runningPID {
+            let detail = NSMenuItem(title: "PID \(pid)", action: nil, keyEquivalent: "")
+            detail.isEnabled = false
+            menu.addItem(detail)
+        }
+        menu.addItem(.separator())
+
+        func add(_ title: String, _ selector: Selector, _ key: String = "", enabled: Bool = true) {
+            let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
+            item.target = self
+            item.isEnabled = enabled && !controller.busy
+            menu.addItem(item)
+        }
+
+        if controller.isRunning {
+            add("Open in Browser", #selector(menuOpen), "o")
+            add("Restart Server", #selector(menuRestart), "r")
+            add("Stop Server…", #selector(menuStop))
+        } else {
+            add("Start Server", #selector(menuStart), "s", enabled: controller.config.repoExists)
+        }
+
+        menu.addItem(.separator())
+        add("Show Panel", #selector(menuShowPanel))
+        add("Open Log", #selector(menuOpenLog), "l")
+        add("Preferences…", #selector(menuPreferences), ",")
+        menu.addItem(.separator())
+        add("Quit DSH Launcher", #selector(menuQuit), "q")
+    }
+
+    @objc private func menuStart()   { controller.start() }
+    @objc private func menuOpen()    { controller.openBrowser() }
+    @objc private func menuRestart() { controller.restart() }
+    @objc private func menuStop()    { controller.stop() }
+    @objc private func menuOpenLog() { controller.openLog() }
+    @objc private func menuPreferences() { PreferencesPanel.show(controller: controller) }
+    @objc private func menuQuit()    { NSApp.terminate(nil) }
+
+    // MARK: Panel
+
+    @objc private func menuShowPanel() {
+        if window == nil {
+            let w = LauncherWindow()
+            w.delegate = self
+            window = w
+        }
+        window?.render()
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    /// Minimal menu bar: without one, ⌘Q and ⌘, do not work.
-    private func buildMenu() {
-        let main = NSMenu()
-        let appItem = NSMenuItem()
-        main.addItem(appItem)
-        let appMenu = NSMenu()
+    // Closing the panel leaves the app alive in the menu bar; it must NOT quit.
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { false }
 
-        appMenu.addItem(withTitle: "Preferences…",
-                        action: #selector(LauncherWindow.showPreferences),
-                        keyEquivalent: ",")
-        appMenu.addItem(withTitle: "Open Log",
-                        action: #selector(LauncherWindow.openLog),
-                        keyEquivalent: "l")
-        appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit DSH Launcher",
-                        action: #selector(NSApplication.terminate(_:)),
-                        keyEquivalent: "q")
-        appItem.submenu = appMenu
-        NSApp.mainMenu = main
-    }
-
-    // Closing the panel quits the launcher; the server keeps running because it
-    // was started detached. Stopping is always explicit.
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
-
-    // Re-check state on focus, so status is never stale after changes made
-    // elsewhere (a terminal, another launcher instance).
-    func windowDidBecomeMain(_ notification: Notification) { window.refresh() }
+    func windowDidBecomeMain(_ notification: Notification) { controller.refresh() }
 }
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.regular)
+// Start as an accessory (menu bar only, no Dock icon).
+app.setActivationPolicy(.accessory)
 app.run()
