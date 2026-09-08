@@ -11,7 +11,36 @@ configurable, so it works for any long-running local server.
 
 Native AppKit, single Swift file, **no dependencies**.
 
-### Menu bar
+## Why I built this
+
+The itch was simple: every time I wanted to use
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), running it
+from source meant running it from a terminal.
+
+```sh
+cd ~/Workspace/deepseek-harness
+pnpm dsh web
+```
+
+The command itself is small — but the ceremony around it wasn't. The terminal
+tab had to stay open for the whole session; pulling new changes meant going
+back to it, killing the server, and starting it again; the URL with its
+per-process token had to be copied out of the logs; and when the session was
+over the server had to be stopped by hand or it kept squatting on the port.
+
+All the actual work happens in a browser tab. The terminal was never the point
+of the tool — it was just the tollbooth in front of it. So I gave that ceremony
+a menu bar icon instead: one click to start, one click to open the browser,
+restart after an update, and a confirmed stop — with the server's state visible
+at a glance and no Dock icon in the way.
+
+Trying to do this *properly* from a GUI app is also what surfaced the sharp
+edges that the terminal had been silently papering over — a GUI app inherits no
+shell `PATH`, DSH's launch token must survive into the opened tab, and stopping
+must target only the process listening on the port. Those are documented under
+[How it works](#how-it-works).
+
+## Menu bar
 
 The status icon is the DeepSeek whale, drawn as a template image so macOS
 tints it for light and dark menu bars. It shows server state at a glance —
@@ -41,7 +70,7 @@ When the server is stopped, the menu shows **Start Server** instead.
 State is polled every 3 seconds, so the icon stays correct even when you start
 or stop the server from a terminal.
 
-### Panel (optional)
+## Panel (optional)
 
 **Show Panel** opens a small window with the same actions:
 
