@@ -363,19 +363,41 @@ final class LauncherController {
         }
         setBusy(true, "Starting…")
         let cfg = config
+        // Who was already on the port? If the same PID is still there after our
+        // launch, our instance failed to bind (EADDRINUSE) and "the port is
+        // open" is a false positive — the state machine would otherwise sit in
+        // "Starting…" forever.
+        let beforePID = Server.listenerPID(port: cfg.port)
         DispatchQueue.global().async {
             Server.start(config: cfg)
             let ready = Server.waitUntilReady(port: cfg.port)
+            var actuallyStarted = false
+            var bindFailure = false
             if ready {
-                Thread.sleep(forTimeInterval: 0.6)   // let HTTP finish binding
-                Server.openBrowser(config: cfg)
+                Thread.sleep(forTimeInterval: 1.0)   // let it finish binding + print
+                let afterPID = Server.listenerPID(port: cfg.port)
+                if let after = afterPID, after != beforePID {
+                    actuallyStarted = true
+                } else {
+                    // Same PID before and after, or nothing at all: our process
+                    // never won the port. The other server (if any) is still up.
+                    bindFailure = true
+                }
             }
             self.refresh()
-            let tail = ready ? "" : Server.logTail(config: cfg)
+            let tail = ready && !bindFailure ? "" : Server.logTail(config: cfg)
+            let openIt = ready && !bindFailure
             DispatchQueue.main.async {
                 self.setBusy(false)
                 self.refresh()
-                if !ready {
+                if bindFailure {
+                    // Never throw away someone else's running server: reuse it,
+                    // and say so instead of pretending we started ours.
+                    let detail = tail.isEmpty
+                        ? "Another server is already on port \(cfg.port) (PID \(beforePID ?? "?")).\n\nFull log: \(cfg.logFile)"
+                        : "\(tail)\n\nAnother server is already on port \(cfg.port). It is left running."
+                    Alerts.warn("Port \(cfg.port) is already in use.", detail: detail)
+                } else if !ready {
                     // Show what the server actually printed. A bare "timed out"
                     // hides the real cause, which is usually one clear line
                     // (a missing toolchain, a port clash, a bad command).
@@ -384,7 +406,15 @@ final class LauncherController {
                         : "\(tail)\n\nFull log: \(cfg.logFile)"
                     Alerts.warn("The server did not start.", detail: detail)
                 }
-                completion?(ready)
+                completion?(actuallyStarted)
+                // Launch the browser after the UI has settled, off the main
+                // thread: it spawns processes and can take a moment.
+                if openIt {
+                    DispatchQueue.global().async {
+                        Thread.sleep(forTimeInterval: 0.4)   // token already flushed
+                        Server.openBrowser(config: cfg)
+                    }
+                }
             }
         }
     }

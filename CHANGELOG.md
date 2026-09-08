@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] — 2026-09-08
+
+### Fixed
+
+- **The menu and window stayed on "Starting…" after Start.** Starting on a port
+  that was already occupied left the state machine stuck forever. The port check
+  (`waitUntilReady`) only tested whether *something* was listening — when the
+  new instance died with `EADDRINUSE`, the *old* server satisfied the check, so
+  the flow reported success, opened the old server's URL, and never cleared the
+  busy state.
+
+  Start now records which PID owned the port before launching and re-checks
+  after: if the listener is unchanged, the new instance never won the port. The
+  busy state is cleared, the existing server is left running, and an alert says
+  the port is already in use (with the failed instance's log shown) instead of
+  hanging indefinitely.
+
+- **Browser launch no longer blocks the state update.** Opening Chrome used to
+  happen inside the completion path on the main thread; it now runs after the
+  UI has settled, on a background thread.
+
+### Changed
+
+- Version bump only; no behavioural change intended beyond the two fixes above.
+
 ## [1.2.0] — 2026-09-08
 
 ### Fixed
@@ -117,6 +142,7 @@ own project.
   Chrome and other apps were in range. All probes now use `-sTCP:LISTEN`, which
   matches only the listening server.
 
+[1.2.1]: https://github.com/songer522/dsh-launcher/releases/tag/v1.2.1
 [1.2.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.2.0
 [1.1.1]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.1
 [1.1.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.0
