@@ -1,5 +1,7 @@
 # DSH Launcher
 
+> **English** · [简体中文](README.zh-CN.md)
+
 A tiny macOS **menu bar** utility for a local development server: start it,
 open it in your browser, restart it, or stop it — without touching a terminal.
 
