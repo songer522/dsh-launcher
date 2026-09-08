@@ -54,7 +54,8 @@ away:
 </p>
 
 The two dimmed lines at the top are status, not actions: server state
-(**Starting…**, **Running on port 3080**, or **Stopped**) and the PID.
+(**Running on port 3080**, **Not running**, or a transient **Starting…** /
+**Stopping…**) and the PID.
 
 When the server is stopped, the menu shows **Start Server** instead.
 
@@ -65,16 +66,15 @@ or stop the server from a terminal.
 
 **Show Panel** opens a small window with the same actions:
 
-```
-  ● ● ●   DSH Launcher
-
-  🟢 Running on port 3080
-     PID 98948 · node --import tsx/esm apps/cli/src/bin.ts web
-
-  [ Open in Browser ]   [ Restart ]   [ Stop Server ]
-```
+<p align="center">
+  <img src="docs/panel.png" alt="The DSH Launcher panel showing a running server, its PID and command, and buttons to open, restart, or stop it" width="620">
+</p>
 
 Closing the panel does **not** quit the app — it stays in the menu bar.
+
+Note the window controls: close and minimize are enabled, while
+zoom/fullscreen is deliberately greyed out — this is a fixed-size panel, and
+stretching it full-screen would only add empty space.
 
 ## Install
 

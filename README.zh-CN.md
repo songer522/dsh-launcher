@@ -34,7 +34,7 @@ pnpm dsh web
   <img src="./docs/menubar.png" alt="DSH Launcher 菜单在 macOS 菜单栏中的样子，显示服务器状态和操作" width="360">
 </p>
 
-顶部两条变暗的灰字是状态而非操作：服务器状态（**正在启动…**、**运行在 3080 端口**或**已停止**）和 PID。
+顶部两条变暗的灰字是状态而非操作：服务器状态（**运行在 3080 端口**、**未运行**，或短暂的**正在启动…** / **正在停止…**）和 PID。
 
 当服务器停止时，菜单会显示 **启动服务器**。
 
@@ -44,16 +44,13 @@ pnpm dsh web
 
 **显示面板**会打开一个带有相同操作的小窗口：
 
-```
-  ● ● ●   DSH Launcher
-
-  🟢 Running on port 3080
-     PID 98948 · node --import tsx/esm apps/cli/src/bin.ts web
-
-  [ Open in Browser ]   [ Restart ]   [ Stop Server ]
-```
+<p align="center">
+  <img src="./docs/panel.png" alt="DSH Launcher 面板，显示正在运行的服务器、其 PID 与命令，以及打开、重启、停止按钮" width="620">
+</p>
 
 关闭面板**不会**退出应用——它仍然保留在菜单栏中。
+
+请注意窗口按钮：关闭和最小化可用，而缩放/全屏被刻意置灰——这是一个固定尺寸的面板，全屏只会拉出一片空白。
 
 ## 安装
 
