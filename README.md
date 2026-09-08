@@ -194,13 +194,48 @@ open /tmp/resolved.png
 
 ## Shell equivalents
 
-If you prefer the terminal, these do the same jobs — note the same
-`-sTCP:LISTEN` filter:
+If you prefer the terminal, these do the same jobs. Two details matter: the
+`-sTCP:LISTEN` filter, and capturing the tokenized URL instead of opening the
+bare origin (which answers 401).
 
 ```sh
-dshweb()  { (cd ~/Workspace/deepseek-harness && pnpm dsh web --no-open) & }
+dshweb() {
+  local port="${DSH_WEB_PORT:-3080}"
+  local log="${TMPDIR:-/tmp}/dsh-web-${port}.log"
+  : > "$log"   # a stale URL carries a dead token
+  (cd ~/Workspace/deepseek-harness && pnpm dsh web --no-open --port "$port" > "$log" 2>&1) &
+  local server=$!
+  tail -f "$log" & local tailer=$!
+
+  while ! nc -z 127.0.0.1 "$port" 2>/dev/null; do
+    kill -0 "$server" 2>/dev/null || { kill "$tailer" 2>/dev/null; return 1; }
+    sleep 0.3
+  done
+
+  # DSH prints `dsh web: http://127.0.0.1:PORT/?token=…` — open that, not the
+  # bare origin. Prefer loopback and exclude brackets: the LAN URL is printed
+  # on the same line inside parentheses.
+  local url=""
+  for _ in {1..40}; do
+    url=$(grep -aoE "https?://[^[:space:]'\"()]*[?&]token=[^[:space:]'\"()]+" "$log" \
+          | grep -E "127\.0\.0\.1|localhost" | tail -1)
+    [ -n "$url" ] && break
+    sleep 0.25
+  done
+
+  open -a "Google Chrome" "${url:-http://127.0.0.1:$port}"
+  wait "$server"; kill "$tailer" 2>/dev/null
+}
+
 dshkill() { lsof -ti tcp:3080 -sTCP:LISTEN | xargs kill; }
 ```
+
+Note that in zsh a background *pipeline* (`cmd | tee log &`) sets `$!` to `tee`
+rather than the server, which breaks the liveness check — hence redirecting to a
+log and tailing it separately.
+
+Beware also that `lsof -ti tcp:PORT` **without** `-sTCP:LISTEN` matches clients
+connected to the port too, so that widely-shared one-liner can kill your browser.
 
 ## License
 
