@@ -8,6 +8,13 @@ build/
 *.zip
 *.dmg
 
+# Packed plugin tarball (built for a release, never committed)
+*.tgz
+
+# The plugin has no dependencies; these only ever appear by accident
+node_modules/
+package-lock.json
+
 # macOS
 .DS_Store
 ._*

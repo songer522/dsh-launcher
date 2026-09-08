@@ -115,6 +115,16 @@ struct Config: Codable {
     static let configURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".config/dsh-launcher/config.json")
 
+    /// Where the companion Host plugin publishes the running server's port,
+    /// PID and tokenized URL. Written by `index.js` in this repository; absent
+    /// when the plugin is not installed or the server is not running.
+    ///
+    /// This is the plugin's default path, so the two halves agree without any
+    /// configuration. A user who moves it in `cordis.patch.yml` falls back to
+    /// log parsing, which is the behaviour they had before the plugin existed.
+    static let runtimeURL = URL(fileURLWithPath: NSHomeDirectory())
+        .appendingPathComponent(".config/dsh-launcher/runtime.json")
+
     static var defaults: Config {
         Config(
             repo: autodetectRepo() ?? NSHomeDirectory(),
@@ -212,13 +222,69 @@ enum Server {
             + "> '\(log)' 2>&1 &")
     }
 
-    /// The URL this run printed, including its authentication token.
+    /// The tokenized URL as reported by the server itself.
+    ///
+    /// The companion Host plugin (`dsh-menubar-launcher`, this repository's
+    /// `index.js`) runs inside the harness and writes its port, PID and
+    /// tokenized URL to `~/.config/dsh-launcher/runtime.json` on startup,
+    /// removing the file on shutdown. That is a far better source than the log:
+    /// it is correct even for a server this app did not start, which is exactly
+    /// the case log-scraping cannot serve.
+    ///
+    /// Returns nil when the plugin is not installed, the file is stale, or its
+    /// schema version is one this build does not understand.
+    ///
+    /// - Parameter expectedPID: the PID currently listening on the port, or nil
+    ///   when nothing is. A descriptor describes a *running* server, so both a
+    ///   missing listener and a differing one mean the file is left over from a
+    ///   process that is gone and its token is dead.
+    ///
+    /// The plugin deletes the file on shutdown, which covers the ordinary case.
+    /// It cannot cover `kill -9`, so the listening PID — not the file's
+    /// existence — is what decides. Being strict here is cheap: a rejected
+    /// descriptor merely falls back to log parsing, whereas accepting a stale
+    /// one opens a tab that answers 401.
+    static func descriptorURL(config: Config, expectedPID: String?) -> String? {
+        // No listener means no running server, whatever the file claims.
+        guard let expectedPID else { return nil }
+
+        guard let data = try? Data(contentsOf: Config.runtimeURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        // An unknown schema version means the file was written by a newer
+        // plugin whose fields this build cannot be trusted to read.
+        guard let version = object["version"] as? Int, version == 1 else { return nil }
+
+        // A descriptor is only about the server this app is managing. A file
+        // describing a harness on another port must not be used.
+        guard let port = object["port"] as? Int, String(port) == config.port else { return nil }
+
+        // The decisive staleness check: the process that wrote this file must
+        // be the one holding the port right now.
+        guard let pid = object["pid"] as? Int, String(pid) == expectedPID else { return nil }
+
+        guard let url = object["authenticatedUrl"] as? String, !url.isEmpty else { return nil }
+        return url
+    }
+
+    /// The URL to open, including its authentication token.
     ///
     /// DSH mints a per-process launch token and prints
     /// `dsh web: http://127.0.0.1:PORT/?token=…`. Opening the bare origin
-    /// returns HTTP 401, so the token has to be carried across. Returns nil
-    /// when no such URL has been printed (yet, or at all).
+    /// returns HTTP 401, so the token has to be carried across.
+    ///
+    /// Two sources, in order of trustworthiness:
+    ///   1. the runtime descriptor written by the companion Host plugin — works
+    ///      for any server, however it was started;
+    ///   2. this run's log file — the original mechanism, kept as a fallback so
+    ///      the app still works without the plugin installed.
+    ///
+    /// Returns nil when neither yields a tokenized URL.
     static func authenticatedURL(config: Config) -> String? {
+        if let fromPlugin = descriptorURL(config: config, expectedPID: listenerPID(port: config.port)) {
+            return fromPlugin
+        }
         guard let text = try? String(contentsOfFile: config.logFile, encoding: .utf8) else { return nil }
         // Exclude ) ] > and quotes from the token: DSH prints the LAN variant in
         // parentheses — `… (LAN: http://…?token=…)` — and a greedy class would

@@ -1,0 +1,17 @@
+# The dsh-menubar-launcher bundle layer.
+#
+# One host row. It waits for `webServer` and `connection`, so it activates only
+# after the server has bound a port and this process has minted its launch
+# token — which is exactly when the descriptor it writes becomes true.
+#
+# Defaults live in the plugin's own schema, so no `config:` block here. To
+# move the descriptor, restate the whole config in your profile's
+# cordis.patch.yml (a patch replaces a row's config, it does not merge into it):
+#
+#   - id: dsh-launcher-runtime
+#     config:
+#       path: /somewhere/else/runtime.json
+
+- insert:
+    - id: dsh-launcher-runtime
+      name: dsh-menubar-launcher

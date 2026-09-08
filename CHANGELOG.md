@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] — 2026-09-08
+
+### Added
+
+- **A companion DSH plugin (`dsh-menubar-launcher`).** The repository is now
+  also an installable DSH bundle: `dsh plugin --profile web add
+  github:songer522/dsh-launcher`. The plugin runs inside the harness and
+  publishes the running server's port, PID and tokenized URL to
+  `~/.config/dsh-launcher/runtime.json`, removing the file when the server
+  stops. It is written `0600` in a `0700` directory, because that URL carries a
+  launch token — a credential.
+
+  It declares no dependencies, so it installs against any harness version and
+  needs no `allowBuilds` approval. In a profile with no web server it does
+  nothing and the harness boots normally.
+
+### Fixed
+
+- **"Open in Browser" opened a dead tab for a server the app did not start.**
+  The tokenized URL was recovered by grepping the app's own log file, which
+  only exists for a server the app launched itself. Started from a terminal
+  there was nothing to read, so the app fell back to the bare origin — which
+  answers HTTP 401.
+
+  The app now prefers the plugin's runtime descriptor and falls back to log
+  parsing, so the plugin stays optional and its absence restores the previous
+  behaviour. A descriptor is trusted only when the PID it names is the process
+  currently listening on the port, so a file left behind by `kill -9` is
+  ignored rather than used to open a tab whose token is dead.
+
 ## [1.2.1] — 2026-09-08
 
 ### Fixed

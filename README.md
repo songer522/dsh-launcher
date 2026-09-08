@@ -13,6 +13,10 @@ configurable, so it works for any long-running local server.
 
 Native AppKit, single Swift file, **no dependencies**.
 
+It ships with a small companion **DSH plugin** so the app learns the server's
+port, PID and tokenized URL from the server itself rather than by reading its
+log. See [DSH plugin](#dsh-plugin).
+
 ## Why I built this
 
 The itch was simple: every time I wanted to use
@@ -129,6 +133,69 @@ The stock command uses `--no-open` because DSH otherwise opens the URL in the
 **system default browser**. Suppressing that and opening the browser here is
 what lets you use Chrome while Safari remains your system default.
 
+## DSH plugin
+
+The app can manage a server it did not start — but then it has no log to read,
+and DSH's per-process token lives only in that log. The result was a menu item
+that opened a tab answering 401.
+
+This repository therefore also ships a Host plugin. It runs *inside* the
+harness, where the port and the token are not parsed but simply known, and
+writes them where the app can find them:
+
+```sh
+dsh plugin --profile web add github:songer522/dsh-launcher
+```
+
+or, without a build step, from the prebuilt tarball:
+
+```sh
+dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
+```
+
+Restart the server and it writes `~/.config/dsh-launcher/runtime.json`:
+
+```json
+{
+  "version": 1,
+  "pid": 29185,
+  "host": "127.0.0.1",
+  "port": 3396,
+  "url": "http://127.0.0.1:3396",
+  "authenticatedUrl": "http://127.0.0.1:3396/?token=…",
+  "startedAt": "2026-09-08T21:51:36.643Z"
+}
+```
+
+The file is created once the server is listening and **removed when it stops**,
+so its presence is itself a liveness signal. It is written `0600`, and the
+directory `0700`: `authenticatedUrl` contains a launch token, which is a
+credential granting full access to that harness. Treat it like one.
+
+The app prefers this file and falls back to log parsing when it is absent, so
+the plugin is optional — without it you get exactly the previous behaviour.
+A descriptor is used only when the PID it names is the process currently
+listening on the port, so a file left behind by a `kill -9` is ignored rather
+than used to open a dead tab.
+
+The plugin is not macOS-specific: anything that wants the authenticated URL of
+a running harness can read the same file.
+
+To move it, restate the row's whole config in your profile's
+`cordis.patch.yml` (a patch replaces a row's config rather than merging into
+it) — note that the app looks only at the default path:
+
+```yaml
+- id: dsh-launcher-runtime
+  config:
+    path: /somewhere/else/runtime.json
+    enabled: true
+```
+
+The plugin declares no dependencies at all, so it installs against any harness
+version and needs no `allowBuilds` approval. In a profile without a web server
+— `headless`, say — it simply does nothing and the harness boots normally.
+
 ## Window behaviour
 
 The app is a menu bar utility (`LSUIElement`), so it has **no Dock icon** and no
@@ -164,8 +231,11 @@ because it execs `node`, which would otherwise fail with
 
 **2. Authentication tokens must be carried over.** DSH mints a per-process
 launch token and prints the URL with it; the bare origin answers HTTP 401, so
-the tab would be dead. The app reads the printed URL back from the log and
-opens that. Servers that print no token fall back to the plain URL.
+the tab would be dead. The app resolves that URL from two sources, in order:
+the [runtime descriptor](#dsh-plugin) written by the companion plugin, then the
+log this run printed. The descriptor is preferred because it is also correct
+for a server started from a terminal — the case where there is no log to read.
+Servers that publish neither fall back to the plain URL.
 
 **3. Port probing must filter for listeners.** This app uses:
 

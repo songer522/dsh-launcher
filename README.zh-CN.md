@@ -11,6 +11,9 @@
 
 原生 AppKit，单个 Swift 文件，**零依赖**。
 
+仓库同时附带一个配套的 **DSH 插件**，让应用直接从服务端本身获知端口、PID 与带
+token 的 URL，而不是去解析日志。见 [DSH 插件](#dsh-插件)。
+
 ## 为什么我要做这个工具
 
 起因很简单：每次我想用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 时，从源码运行就意味着必须从终端运行。
@@ -99,6 +102,63 @@ cd dsh-launcher
 
 标准命令使用 `--no-open`，因为 DSH 会默认在系统默认浏览器中打开 URL。在这里抑制它并在应用自身内打开浏览器，这样你可以在使用 Chrome 的同时，让 Safari 保持为系统默认浏览器。
 
+## DSH 插件
+
+应用可以管理一个并非由它启动的服务器 —— 但那样它就没有日志可读，而 DSH
+的进程级 token 只存在于那份日志里。结果就是：菜单里那一项打开的标签页返回 401。
+
+因此本仓库还附带一个 Host 插件。它运行在 harness **内部**，端口与 token 在那里
+不需要解析、本就是已知的，插件把它们写到应用能读到的位置：
+
+```sh
+dsh plugin --profile web add github:songer522/dsh-launcher
+```
+
+或者直接用预构建 tarball 安装，无需构建步骤：
+
+```sh
+dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
+```
+
+重启服务器后，它会写入 `~/.config/dsh-launcher/runtime.json`：
+
+```json
+{
+  "version": 1,
+  "pid": 29185,
+  "host": "127.0.0.1",
+  "port": 3396,
+  "url": "http://127.0.0.1:3396",
+  "authenticatedUrl": "http://127.0.0.1:3396/?token=…",
+  "startedAt": "2026-09-08T21:51:36.643Z"
+}
+```
+
+该文件在服务器开始监听后创建，并在**服务器停止时删除**，所以它是否存在本身就是
+一个存活信号。文件权限为 `0600`、目录为 `0700`：`authenticatedUrl` 里含有启动
+token，那是一份可以完全访问该 harness 的凭据，请按凭据对待。
+
+应用优先使用这个文件，文件不存在时回退到解析日志，所以插件是可选的 —— 不装它就
+是原来的行为。只有当描述文件中的 PID 正是当前监听该端口的进程时才会被采用，因此
+`kill -9` 之后残留的文件会被忽略，而不会被拿去打开一个已经失效的标签页。
+
+这个插件并不局限于 macOS：任何想获取运行中 harness 的带认证 URL 的程序，都可以
+读同一个文件。
+
+要改变位置，请在 profile 的 `cordis.patch.yml` 中重述该行的完整配置（patch 是
+替换而不是合并该行的 config）—— 注意应用只会查看默认路径：
+
+```yaml
+- id: dsh-launcher-runtime
+  config:
+    path: /somewhere/else/runtime.json
+    enabled: true
+```
+
+插件不声明任何依赖，因此可以配合任意 harness 版本安装，也不需要 `allowBuilds`
+授权。在没有 Web 服务器的 profile（例如 `headless`）中，它什么也不做，harness
+照常启动。
+
 ## 窗口行为
 
 该应用是一个菜单栏工具（`LSUIElement`），所以它**没有 Dock 图标**，也没有 ⌘Tab 入口。只能从菜单栏退出。
@@ -121,7 +181,7 @@ cd dsh-launcher
 
 **1. GUI 应用没有 shell PATH.** 双击的应用不会读取 `~/.zshrc`，也不会继承登录 `PATH`，所以 `pnpm` 根本找不到。会自动对照常见的安装位置显式解析二进制，并以登录 shell 查找为后备。生成的服务器也会在 `PATH` 前面加上这些目录：只解决 `pnpm` 是不够的，因为它会执行 `node`，否则会报 `env: node: No such file or directory`。
 
-**2. 认证 token 必须带过来.** DSH 会为每个进程生成启动 token 并打印带 token 的 URL；裸域名会返回 HTTP 401，所以标签页会是死页。应用会从日志里读回打印的 URL 并打开那个。不打印 token 的服务器会回退到普通 URL。
+**2. 认证 token 必须带过来.** DSH 会为每个进程生成启动 token 并打印带 token 的 URL；裸域名会返回 HTTP 401，所以标签页会是死页。应用按顺序从两个来源解析该 URL：先是配套插件写入的[运行时描述文件](#dsh-插件)，然后才是本次运行打印的日志。优先用描述文件，是因为它对从终端启动的服务器同样正确 —— 而那正是根本没有日志可读的情况。两者都没有的服务器会回退到普通 URL。
 
 **3. 端口探测必须筛出监听者。** 这个应用使用：
 
