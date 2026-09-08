@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-09-08
+
+### Fixed
+
+- **Starting the server from the app did nothing.** A GUI app inherits no login
+  `PATH`, and the `/bin/sh -lc` wrapper did not read the user's shell rc files
+  either, so a Homebrew toolchain was invisible. `pnpm` itself resolved, but the
+  `node` it execs did not, and the run died immediately with
+  `env: node: No such file or directory` — leaving the app to sit through its
+  40-second timeout. The launch now prepends the directories where the tools
+  were actually found, plus a login-shell `PATH`, so the whole spawn chain can
+  see the toolchain.
+
+- **The opened tab was unauthorized.** DSH mints a per-process launch token and
+  prints `dsh web: http://127.0.0.1:PORT/?token=…`; opening the bare origin
+  answers **HTTP 401**. The app opened the bare origin, so the tab was dead and
+  the URL had to be copied from a terminal by hand. The printed URL is now read
+  back from the log and opened with its token. Servers that print no token
+  (a plain Vite dev server, say) still fall back to the plain URL.
+
+  The URL is matched excluding brackets and quotes, and loopback is preferred:
+  DSH prints the LAN address on the same line inside parentheses, so a greedy
+  match would capture a trailing `)` and prefer an address that may be
+  unreachable — and would needlessly put the token on the network.
+
+- **Start failures were silent.** A failed start reported only a timeout. The
+  alert now shows the last lines the server actually printed, which is normally
+  the one line that explains the failure.
+
+### Changed
+
+- The log is truncated at each start, so a parsed URL always belongs to the
+  current run rather than a previous one.
+
 ## [1.1.1] — 2026-09-08
 
 ### Changed
@@ -83,6 +117,7 @@ own project.
   Chrome and other apps were in range. All probes now use `-sTCP:LISTEN`, which
   matches only the listening server.
 
+[1.2.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.2.0
 [1.1.1]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.1
 [1.1.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.0.0

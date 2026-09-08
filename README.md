@@ -132,14 +132,22 @@ live sessions.
 
 ## How it works
 
-Three details that are easy to get wrong:
+Four details that are easy to get wrong:
 
 **1. GUI apps have no shell PATH.** A double-clicked app does not read
 `~/.zshrc` and does not inherit a login `PATH`, so `pnpm` would simply not be
 found. Binaries are resolved explicitly against common install locations, with
-a login-shell lookup as a fallback.
+a login-shell lookup as a fallback. The spawned server also gets those
+directories prepended to its `PATH`: resolving `pnpm` alone is not enough,
+because it execs `node`, which would otherwise fail with
+`env: node: No such file or directory`.
 
-**2. Port probing must filter for listeners.** This app uses:
+**2. Authentication tokens must be carried over.** DSH mints a per-process
+launch token and prints the URL with it; the bare origin answers HTTP 401, so
+the tab would be dead. The app reads the printed URL back from the log and
+opens that. Servers that print no token fall back to the plain URL.
+
+**3. Port probing must filter for listeners.** This app uses:
 
 ```sh
 lsof -ti tcp:3080 -sTCP:LISTEN
@@ -150,7 +158,7 @@ port — your browser, your editor — and acting on those PIDs would terminate
 unrelated applications. Only one process can hold `LISTEN` on a port, so this
 targets exactly the server no matter what its PID happens to be.
 
-**3. Stopping is graceful.** `TERM` first, escalating to `KILL` only if the port
+**4. Stopping is graceful.** `TERM` first, escalating to `KILL` only if the port
 is still bound after ~6 seconds.
 
 ## Development

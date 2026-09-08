@@ -54,6 +54,30 @@ enum Tools {
     static let open = "/usr/bin/open"
     static let kill = "/bin/kill"
     static let ps   = "/bin/ps"
+
+    /// Directories to prepend to PATH for spawned servers.
+    ///
+    /// Resolving `pnpm` is not enough: pnpm execs `node`, and node execs more
+    /// tools, so the whole chain needs the toolchain directory on PATH. This
+    /// includes the directory each located tool actually came from, plus a
+    /// login-shell PATH when one can be read.
+    static var binDirectories: [String] {
+        var dirs: [String] = []
+        for tool in ["pnpm", "npm", "node", "yarn", "bun"] {
+            if let path = which(tool) {
+                let dir = (path as NSString).deletingLastPathComponent
+                if !dir.isEmpty && !dirs.contains(dir) { dirs.append(dir) }
+            }
+        }
+        // A login+interactive shell reads the user's rc files, so it sees
+        // version managers (nvm, volta, asdf) that fixed paths would miss.
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let shellPath = Shell.run("\(shell) -lic 'printf %s \"$PATH\"' 2>/dev/null")
+        for dir in shellPath.split(separator: ":").map(String.init) where !dir.isEmpty {
+            if !dirs.contains(dir) { dirs.append(dir) }
+        }
+        return dirs
+    }
 }
 
 // MARK: - Shell
@@ -171,9 +195,53 @@ enum Server {
     /// Start detached so the server outlives this launcher.
     static func start(config: Config) {
         let log = config.logFile.replacingOccurrences(of: "'", with: "'\\''")
-        Shell.run("cd '\(config.repo)' && /usr/bin/nohup /bin/sh -lc "
-            + "'\(config.resolvedCommand.replacingOccurrences(of: "'", with: "'\\''"))' "
+        let command = config.resolvedCommand.replacingOccurrences(of: "'", with: "'\\''")
+
+        // A GUI app inherits no login PATH, and `sh -lc` does not read the
+        // user's rc files either — so a toolchain under /opt/homebrew/bin is
+        // invisible and the run dies with `env: node: No such file or
+        // directory` (pnpm resolves, but the node it execs does not). Prepend
+        // the directories where the tools were actually found, so processes
+        // spawned further down the chain can see them too.
+        let extraPath = Tools.binDirectories.joined(separator: ":")
+
+        // Truncate the log per run: it is parsed below for this run's URL, and
+        // stale content would yield a stale (invalid) token.
+        Shell.run("cd '\(config.repo)' && "
+            + "PATH='\(extraPath)':\"$PATH\" /usr/bin/nohup /bin/sh -c '\(command)' "
             + "> '\(log)' 2>&1 &")
+    }
+
+    /// The URL this run printed, including its authentication token.
+    ///
+    /// DSH mints a per-process launch token and prints
+    /// `dsh web: http://127.0.0.1:PORT/?token=…`. Opening the bare origin
+    /// returns HTTP 401, so the token has to be carried across. Returns nil
+    /// when no such URL has been printed (yet, or at all).
+    static func authenticatedURL(config: Config) -> String? {
+        guard let text = try? String(contentsOfFile: config.logFile, encoding: .utf8) else { return nil }
+        // Exclude ) ] > and quotes from the token: DSH prints the LAN variant in
+        // parentheses — `… (LAN: http://…?token=…)` — and a greedy class would
+        // swallow the closing bracket and produce an invalid token.
+        let pattern = #"https?://[^\s'"()\[\]<>]*[?&]token=[^\s'"()\[\]<>]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        let urls = matches.compactMap { Range($0.range, in: text).map { String(text[$0]) } }
+        guard !urls.isEmpty else { return nil }
+
+        // Prefer a loopback URL. DSH prints the LAN address on the same line,
+        // and the last match would otherwise be the LAN one — which may be
+        // unreachable, and needlessly exposes the token to the network.
+        let loopback = urls.last { url in
+            url.contains("127.0.0.1") || url.contains("localhost") || url.contains("[::1]")
+        }
+        return loopback ?? urls.last
+    }
+
+    /// Whatever the run printed, for surfacing a failure to the user.
+    static func logTail(config: Config, lines: Int = 6) -> String {
+        guard let text = try? String(contentsOfFile: config.logFile, encoding: .utf8) else { return "" }
+        return text.split(separator: "\n").suffix(lines).joined(separator: "\n")
     }
 
     /// Wait for the port to accept connections. Returns false on timeout.
@@ -199,12 +267,20 @@ enum Server {
         return listenerPID(port: port) == nil
     }
 
+    /// Open the running server in the configured browser.
+    ///
+    /// Prefers the tokenized URL this run printed: DSH mints a per-process
+    /// launch token, and the bare origin answers 401, which shows up as a blank
+    /// or "unauthorized" tab. Falls back to the plain URL for servers that
+    /// print no token (a plain Vite dev server, say).
     static func openBrowser(config: Config) {
+        let target = authenticatedURL(config: config) ?? config.url
         let app = config.browser.replacingOccurrences(of: "'", with: "'\\''")
+        let quotedURL = "'" + target.replacingOccurrences(of: "'", with: "'\\''") + "'"
         if app.isEmpty {
-            Shell.run("\(Tools.open) \(config.url)")           // system default
+            Shell.run("\(Tools.open) \(quotedURL)")            // system default
         } else {
-            Shell.run("\(Tools.open) -a '\(app)' \(config.url)")
+            Shell.run("\(Tools.open) -a '\(app)' \(quotedURL)")
         }
     }
 }
@@ -295,12 +371,18 @@ final class LauncherController {
                 Server.openBrowser(config: cfg)
             }
             self.refresh()
+            let tail = ready ? "" : Server.logTail(config: cfg)
             DispatchQueue.main.async {
                 self.setBusy(false)
                 self.refresh()
                 if !ready {
-                    Alerts.warn("The server did not start in time.",
-                                detail: "Check the log:\n\(cfg.logFile)")
+                    // Show what the server actually printed. A bare "timed out"
+                    // hides the real cause, which is usually one clear line
+                    // (a missing toolchain, a port clash, a bad command).
+                    let detail = tail.isEmpty
+                        ? "Nothing was logged.\nCheck: \(cfg.logFile)"
+                        : "\(tail)\n\nFull log: \(cfg.logFile)"
+                    Alerts.warn("The server did not start.", detail: detail)
                 }
                 completion?(ready)
             }

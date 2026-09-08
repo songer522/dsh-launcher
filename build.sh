@@ -16,7 +16,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="DSH Launcher"
 BUNDLE_ID="io.github.dsh-launcher"
-VERSION="1.1.1"
+VERSION="1.2.0"
 
 if [ "${1:-}" = "--uninstall" ]; then
     pkill -f "$APP_NAME.app/Contents/MacOS/DSHLauncher" 2>/dev/null || true
