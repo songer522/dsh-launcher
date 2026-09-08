@@ -13,11 +13,13 @@ Native AppKit, single Swift file, **no dependencies**.
 
 ### Menu bar
 
-The status icon shows server state at a glance — **filled** when running,
-**outline** when stopped — and everything is one click away:
+The status icon is the DeepSeek whale, drawn as a template image so macOS
+tints it for light and dark menu bars. It shows server state at a glance —
+**solid** when running, **dimmed** when stopped — and everything is one click
+away:
 
 ```
-  ●  ← status icon
+  🐳 ← status icon (solid = running, dimmed = stopped)
   ┌────────────────────────┐
   │ Running on port 3080   │
   │ PID 98948              │

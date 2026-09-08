@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] — 2026-09-08
+
+### Changed
+
+- **Status bar icon is now the DeepSeek whale** rather than a plain circle. The
+  glyph is stored as SVG path data and drawn natively with `NSBezierPath`, so it
+  stays crisp at any menu bar height and on any display scale — no bitmaps to
+  keep in sync. Running renders it solid; stopped renders it dimmed, so the two
+  states differ by weight as well as by shape.
+
+  Because template images are masks, the dimmed state comes from alpha rather
+  than a grey fill — a grey colour would be flattened back to solid black by the
+  template tinting.
+
 ## [1.1.0] — 2026-09-08
 
 Reworked from a windowed app into a menu bar utility.
@@ -69,5 +83,6 @@ own project.
   Chrome and other apps were in range. All probes now use `-sTCP:LISTEN`, which
   matches only the listening server.
 
+[1.1.1]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.1
 [1.1.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/songer522/dsh-launcher/releases/tag/v1.0.0
