@@ -143,6 +143,8 @@ swiftc -O Sources/DSHLauncher.swift -o build/DSHLauncher && ./build/DSHLauncher
 
 ### 代码签名的坑
 
+如果你只是安装使用，这里无需做任何事 —— `build.sh` 已经处理好了，并会在结束前校验签名。它只在你要修改构建脚本时才有意义，所以这里记录下步骤顺序不能调整的原因。
+
 `build.sh` **最后** 才对 bundle 签名，这个顺序不是随意的。签名后再修改 bundle —— 替换图标、编辑 `Info.plist` —— 会让签名失效，macOS 于是拒绝把该目录当作应用。肉眼可见的症状是 **Finder 显示的是文件夹图标**，看着像图标 bug，其实是签名坏了：
 
 ```text

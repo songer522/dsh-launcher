@@ -191,6 +191,11 @@ swiftc -O Sources/DSHLauncher.swift -o build/DSHLauncher && ./build/DSHLauncher
 
 ### The code-signing gotcha
 
+Nothing to do here if you are just installing — `build.sh` already gets this
+right, and verifies the signature before it finishes. It matters only if you
+edit the build script, so the reason the step order cannot be rearranged is
+written down.
+
 `build.sh` signs the bundle **last**, and that ordering is not cosmetic.
 Modifying a bundle after signing — replacing the icon, editing `Info.plist` —
 invalidates the signature, and macOS then refuses to treat the directory as an
