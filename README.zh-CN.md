@@ -57,6 +57,18 @@ pnpm dsh web
 
 ## 安装
 
+本仓库提供**两个相互独立的部分**，先分清楚它们各自是什么：
+
+| 部分 | 是什么 | 安装方式 | 是否必需 |
+|---|---|---|---|
+| **应用** | macOS 菜单栏应用 | `./build.sh` | **必需** —— 它就是启动器本身 |
+| **插件** | DSH 插件（`dsh-menubar-launcher`） | `dsh plugin add` | 可选 —— 推荐安装 |
+
+应用才是主体。插件只是一个运行在服务端内部的小助手，负责把该打开的 URL 告诉应用。
+**没有插件应用也能用**，具体区别见[我需要装插件吗？](#我需要装插件吗)。
+
+### 1. 安装应用
+
 需要 macOS 13 及以上版本，以及 Xcode 命令行工具（`xcode-select --install`）。
 
 ```sh
@@ -65,12 +77,57 @@ cd dsh-launcher
 ./build.sh
 ```
 
-它会编译、打包、签名并安装到 `/Applications`。
+它会编译、打包、签名并安装到 `/Applications`。从那里启动即可 —— 它会出现在菜单栏，
+没有 Dock 图标。
 
 ```sh
 ./build.sh --dev        # 构建到 ./build 而不安装
 ./build.sh --uninstall  # 卸载已安装的应用程序
 ```
+
+### 2. 安装插件（推荐）
+
+```sh
+dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
+```
+
+**然后重启服务器** —— 用应用菜单里的**重启**，或者按你平时的方式停止再启动。插件是在
+服务器启动时组合进去的，所以已经在运行的服务器不会带上它，不重启就什么都不会出现。
+
+验证是否生效：
+
+```sh
+cat ~/.config/dsh-launcher/runtime.json
+```
+
+输出一段 JSON 就说明已经生效。提示 "No such file or directory" 则说明：要么装完插件后
+还没重启服务器，要么服务器没在运行。
+
+插件也会出现在 DSH 网页界面的**设置 → 插件**中，名为 `dsh-menubar-launcher`，带一个
+绿色的 *active* 圆点。
+
+> **要装到应用实际启动的那个 profile 上。** 上面的命令装进 `web` profile，也就是
+> `dsh web` 和应用默认命令（`pnpm dsh web …`）都会启动的那个。如果你在偏好设置里把
+> **命令**改成了别的 profile，请改用 `dsh plugin --profile <名称> add …`，否则应用启动的
+> 服务器上并没有这个插件。
+
+卸载：`dsh plugin --profile web remove dsh-menubar-launcher`。
+
+### 我需要装插件吗？
+
+不需要。应用一直是通过读取**它自己启动的**那个服务器的日志来获取 DSH 的进程级 token 的，
+这条路依然有效。插件解决的是这套机制覆盖不到的情况 —— 服务器**不是**由应用启动的：
+
+| 场景 | 不装插件 | 装了插件 |
+|---|---|---|
+| 由应用启动服务器 | ✅ 正常（读它的日志） | ✅ 正常 |
+| 服务器是从终端启动的 | ❌ 打开的标签页返回 401 | ✅ 正常 |
+| 服务器在应用之前就已启动 | ❌ 打开的标签页返回 401 | ✅ 正常 |
+
+所以：如果你总是从应用启动服务器，只装应用就够了；如果你也会在终端跑 `dsh web`，或者
+让服务器跨越应用重启一直运行，那就把插件也装上。
+
+两条路径都是刻意保留的 —— 插件是增强，不是前提，应用从不假定它一定存在。
 
 ## 配置
 
@@ -108,16 +165,11 @@ cd dsh-launcher
 的进程级 token 只存在于那份日志里。结果就是：菜单里那一项打开的标签页返回 401。
 
 因此本仓库还附带一个 Host 插件。它运行在 harness **内部**，端口与 token 在那里
-不需要解析、本就是已知的，插件把它们写到应用能读到的位置：
+不需要解析、本就是已知的，插件把它们写到应用能读到的位置。安装方式见
+[安装插件](#2-安装插件推荐)；也可以直接从源码安装，同样不需要构建步骤：
 
 ```sh
 dsh plugin --profile web add github:songer522/dsh-launcher
-```
-
-或者直接用预构建 tarball 安装，无需构建步骤：
-
-```sh
-dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
 ```
 
 重启服务器后，它会写入 `~/.config/dsh-launcher/runtime.json`：

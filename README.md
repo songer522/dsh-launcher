@@ -82,6 +82,20 @@ stretching it full-screen would only add empty space.
 
 ## Install
 
+This repository ships **two independent pieces**, and it is worth being clear
+about which is which:
+
+| Piece | What it is | Installed by | Required? |
+|---|---|---|---|
+| **The app** | a macOS menu bar app | `./build.sh` | **yes** — it is the launcher |
+| **The plugin** | a DSH plugin (`dsh-menubar-launcher`) | `dsh plugin add` | no — recommended |
+
+The app is the product. The plugin is a small helper that runs inside the
+server and tells the app the URL to open. **The app works without it**; see
+[Do I need the plugin?](#do-i-need-the-plugin) for exactly what changes.
+
+### 1. Install the app
+
 Requires macOS 13+ and the Xcode Command Line Tools (`xcode-select --install`).
 
 ```sh
@@ -90,12 +104,64 @@ cd dsh-launcher
 ./build.sh
 ```
 
-That compiles, bundles, signs, and installs to `/Applications`.
+That compiles, bundles, signs, and installs to `/Applications`. Launch it from
+there — it appears in the menu bar, with no Dock icon.
 
 ```sh
 ./build.sh --dev        # build into ./build without installing
 ./build.sh --uninstall  # remove the installed app
 ```
+
+### 2. Install the plugin (recommended)
+
+```sh
+dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
+```
+
+**Then restart the server** — from the app's **Restart** menu item, or by
+stopping and starting it however you normally do. A plugin is composed when the
+server starts, so a server that was already running does not have it, and
+nothing will appear until it restarts.
+
+Verify it took effect:
+
+```sh
+cat ~/.config/dsh-launcher/runtime.json
+```
+
+A JSON object means it is working. "No such file or directory" means either the
+server has not been restarted since installing, or it is not running.
+
+The plugin also appears under **Settings → Plugins** in the DSH web UI, as
+`dsh-menubar-launcher` with a green *active* dot.
+
+> **Use the same profile the app launches.** The command above installs into the
+> `web` profile, which is what `dsh web` and the app's default command
+> (`pnpm dsh web …`) both boot. If you changed the app's **command** in
+> Preferences to use a different profile, pass that profile to
+> `dsh plugin --profile <name> add …` instead, or the server the app starts will
+> not have the plugin.
+
+To remove it: `dsh plugin --profile web remove dsh-menubar-launcher`.
+
+### Do I need the plugin?
+
+No. The app has always resolved DSH's per-process token by reading the log of
+the server **it started**, and that still works. The plugin matters in the case
+that mechanism cannot cover — a server the app did **not** start:
+
+| Situation | Without the plugin | With the plugin |
+|---|---|---|
+| You start the server from the app | ✅ works (reads its log) | ✅ works |
+| The server was started from a terminal | ❌ opens a tab that 401s | ✅ works |
+| The server was started before the app | ❌ opens a tab that 401s | ✅ works |
+
+So: install the app alone if you always start the server from the app. Add the
+plugin if you also run `dsh web` from a terminal, or leave a server running
+across app restarts.
+
+Both paths are kept deliberately — the plugin is an improvement, not a
+requirement, and the app never assumes it is there.
 
 ## Configuration
 
@@ -141,19 +207,15 @@ that opened a tab answering 401.
 
 This repository therefore also ships a Host plugin. It runs *inside* the
 harness, where the port and the token are not parsed but simply known, and
-writes them where the app can find them:
+writes them where the app can find them. [Install it](#2-install-the-plugin-recommended)
+with `dsh plugin add`; installing from source instead of the release tarball
+works too, and needs no build step either:
 
 ```sh
 dsh plugin --profile web add github:songer522/dsh-launcher
 ```
 
-or, without a build step, from the prebuilt tarball:
-
-```sh
-dsh plugin --profile web add https://github.com/songer522/dsh-launcher/releases/latest/download/dsh-menubar-launcher.tgz
-```
-
-Restart the server and it writes `~/.config/dsh-launcher/runtime.json`:
+Once the server restarts, it writes `~/.config/dsh-launcher/runtime.json`:
 
 ```json
 {
