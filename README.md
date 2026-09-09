@@ -26,6 +26,12 @@ It ships with a small companion **DSH plugin** so the app learns the server's
 port, PID and tokenized URL from the server itself rather than by reading its
 log. See [DSH plugin](#dsh-plugin).
 
+
+
+https://github.com/user-attachments/assets/153503d2-c5b8-4d74-aaff-aa20f18bf6de
+
+
+
 ## Why I built this
 
 The itch was simple: every time I wanted to use
