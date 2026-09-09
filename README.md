@@ -2,6 +2,15 @@
 
 > **English** · [简体中文](README.zh-CN.md)
 
+> [!IMPORTANT]
+> **Arrived from the plugin market? This plugin belongs to a macOS app.**
+> On its own it only writes a small JSON file describing the running server —
+> that is deliberate, and it is all it does. The thing you actually interact
+> with is a **macOS menu bar app**, built from this repository with
+> `./build.sh`. Install the app first; see [Install](#install).
+> Not on macOS? The plugin runs anywhere, but nothing here will be useful to
+> you without the app.
+
 A tiny macOS **menu bar** utility for a local development server: start it,
 open it in your browser, restart it, or stop it — without touching a terminal.
 
@@ -178,7 +187,8 @@ Settings are stored as JSON at `~/.config/dsh-launcher/config.json`:
   "command": "pnpm dsh web --no-open --port {port}",
   "port": "3080",
   "browser": "Google Chrome",
-  "logFile": "/tmp/dsh-web.log"
+  "logFile": "/tmp/dsh-web.log",
+  "language": "system"
 }
 ```
 
@@ -189,9 +199,20 @@ Settings are stored as JSON at `~/.config/dsh-launcher/config.json`:
 | `port` | the port to watch, and to substitute into the command |
 | `browser` | app name to open, or `""` for the system default |
 | `logFile` | where the server's stdout/stderr is written |
+| `language` | interface language: `system`, `en`, or `zh-Hans` |
 
 Because it is just a command in a directory, it happily runs `npm run dev`,
 `vite`, `python -m http.server`, or anything else.
+
+### Language
+
+The interface is available in **English** and **简体中文**. Choose one under
+**Preferences (⌘,) → Language**; it applies immediately, with no relaunch.
+
+The default, **System**, follows macOS — Chinese when your preferred language
+is Chinese, English otherwise. The explicit choices exist because running one
+app in a different language from the rest of the system is common enough among
+developers to be worth a setting.
 
 ### Why a launch flag matters
 

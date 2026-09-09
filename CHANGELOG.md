@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] — 2026-09-09
+
+### Added
+
+- **Simplified Chinese interface.** Every menu item, button, status line,
+  alert and Preferences label is available in English and 简体中文. Choose the
+  language under **Preferences (⌘,) → Language**; it applies immediately,
+  without relaunching. The default follows macOS, with explicit English and
+  Chinese options for running the app in a different language from the system.
+
+  Stored as a new `language` key in `config.json`
+  (`system` · `en` · `zh-Hans`), and declared in `CFBundleLocalizations` so
+  system-supplied text in alerts follows the same language.
+
+### Fixed
+
+- **A malformed setting no longer discards the whole configuration.**
+  `config.json` is documented as hand-editable, but `JSONDecoder` treats an
+  unrecognized enum value as a failure for the entire file, and `load()` falls
+  back to defaults on any failure — so a typo in the new `language` key would
+  have silently reset the project path, port and browser too. `language` now
+  decodes leniently: an unreadable value costs only the language preference.
+
 ## [1.3.0] — 2026-09-08
 
 ### Added

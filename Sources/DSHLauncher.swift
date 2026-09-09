@@ -99,6 +99,61 @@ enum Shell {
     }
 }
 
+// MARK: - Localization
+
+/// The languages the interface is available in.
+///
+/// `system` follows macOS: the app is Chinese when the system's preferred
+/// language is Chinese, English otherwise. The two explicit cases let someone
+/// run the app in one language while the rest of the system is in another,
+/// which is common enough among developers to be worth the switch.
+enum Language: String, Codable, CaseIterable {
+    case system
+    case english = "en"
+    case chinese = "zh-Hans"
+
+    /// The language actually used for rendering, with `system` resolved.
+    var effective: Language {
+        guard self == .system else { return self }
+        // `preferredLanguages` is ordered by the user's own ranking, so the
+        // first Chinese entry ahead of any other match is the honest answer.
+        // Matching the prefix covers zh-Hans, zh-Hans-CN, zh-CN and friends.
+        for code in Locale.preferredLanguages {
+            if code.hasPrefix("zh") { return .chinese }
+            if code.hasPrefix("en") { return .english }
+        }
+        return .english
+    }
+
+    /// Name shown in the Preferences picker, in the language it selects — a
+    /// language list nobody can read is not a language list.
+    var displayName: String {
+        switch self {
+        case .system:  return L.t("System", "跟随系统")
+        case .english: return "English"
+        case .chinese: return "简体中文"
+        }
+    }
+}
+
+/// The string table.
+///
+/// Two languages and a few dozen strings do not justify `.lproj` bundles and
+/// `NSLocalizedString`: those would split the text away from the code that
+/// uses it, and this app is deliberately one file that builds with a bare
+/// `swiftc` call. `L.t(en, zh)` keeps both readings on the same line, where a
+/// missing translation is visible rather than a silent fallback at runtime.
+enum L {
+    /// The language currently rendering. Set from config at startup and
+    /// whenever Preferences is saved.
+    static var current: Language = .system
+
+    /// Pick one of the two readings for the active language.
+    static func t(_ en: String, _ zh: String) -> String {
+        current.effective == .chinese ? zh : en
+    }
+}
+
 // MARK: - Configuration
 
 /// User settings, resolved in this order:
@@ -111,6 +166,45 @@ struct Config: Codable {
     var port: String
     var browser: String
     var logFile: String
+    /// Interface language. Optional in the JSON: a config file written by an
+    /// older build has no such key, and must keep loading rather than being
+    /// discarded for it — which `JSONDecoder` would otherwise do, silently
+    /// resetting every one of the user's settings to defaults.
+    ///
+    /// An unrecognized value decodes to nil rather than failing, for the same
+    /// reason: this file is documented as hand-editable, and a typo here
+    /// (`zh`, `chinese`) should cost the user their language preference, not
+    /// their project path, port and browser. See `init(from:)`.
+    var language: Language?
+
+    private enum CodingKeys: String, CodingKey {
+        case repo, command, port, browser, logFile, language
+    }
+
+    /// Decode with a tolerant `language`.
+    ///
+    /// Spelled out rather than left to the synthesized initializer, which
+    /// treats a present-but-invalid enum value as a hard failure and takes the
+    /// whole file down with it.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        repo = try container.decode(String.self, forKey: .repo)
+        command = try container.decode(String.self, forKey: .command)
+        port = try container.decode(String.self, forKey: .port)
+        browser = try container.decode(String.self, forKey: .browser)
+        logFile = try container.decode(String.self, forKey: .logFile)
+        language = try? container.decodeIfPresent(Language.self, forKey: .language)
+    }
+
+    /// Memberwise initializer, restored: writing `init(from:)` suppresses it.
+    init(repo: String, command: String, port: String, browser: String, logFile: String, language: Language?) {
+        self.repo = repo
+        self.command = command
+        self.port = port
+        self.browser = browser
+        self.logFile = logFile
+        self.language = language
+    }
 
     static let configURL = URL(fileURLWithPath: NSHomeDirectory())
         .appendingPathComponent(".config/dsh-launcher/config.json")
@@ -131,9 +225,13 @@ struct Config: Codable {
             command: "pnpm dsh web --no-open --port {port}",
             port: "3080",
             browser: "Google Chrome",
-            logFile: NSTemporaryDirectory() + "dsh-web.log"
+            logFile: NSTemporaryDirectory() + "dsh-web.log",
+            language: .system
         )
     }
+
+    /// The language to render in; `system` when the file predates the setting.
+    var resolvedLanguage: Language { language ?? .system }
 
     /// Look for a DeepSeek Harness checkout in the usual places.
     static func autodetectRepo() -> String? {
@@ -360,6 +458,17 @@ final class LauncherController {
     static let shared = LauncherController()
 
     var config = Config.load()
+
+    /// Adopt the saved language before anything renders.
+    ///
+    /// This runs when `shared` is first touched, which is during
+    /// `applicationDidFinishLaunching` — before the status item, its menu, or
+    /// the panel exist. Doing it later would build the first menu in the wrong
+    /// language and only correct it on the next open.
+    private init() {
+        L.current = config.resolvedLanguage
+    }
+
     private(set) var runningPID: String?
     private(set) var busy = false
     private(set) var busyMessage = ""
@@ -370,6 +479,20 @@ final class LauncherController {
 
     func addObserver(_ block: @escaping () -> Void) { observers.append(block) }
 
+    /// Views that must rebuild their static text when the language changes.
+    ///
+    /// Separate from `addObserver`: state observers fire several times a second
+    /// while polling, and re-setting every button title on each tick would be
+    /// wasted work. The menu bar needs no entry here — it is rebuilt from
+    /// scratch each time it opens, so it picks the new language up by itself.
+    private var relabelers: [() -> Void] = []
+    func addRelabeler(_ block: @escaping () -> Void) { relabelers.append(block) }
+
+    /// Re-render fixed titles after a language change.
+    func relabel() {
+        DispatchQueue.main.async { self.relabelers.forEach { $0() } }
+    }
+
     private func notify() {
         DispatchQueue.main.async { self.observers.forEach { $0() } }
     }
@@ -378,14 +501,19 @@ final class LauncherController {
 
     var statusText: String {
         if busy { return busyMessage }
-        return isRunning ? "Running on port \(config.port)" : "Not running"
+        return isRunning
+            ? L.t("Running on port \(config.port)", "正在端口 \(config.port) 上运行")
+            : L.t("Not running", "未运行")
     }
 
     var detailText: String {
         if busy { return "" }
         if let pid = runningPID { return "PID \(pid) · \(Server.describe(pid: pid))" }
-        if !config.repoExists { return "⚠︎ Project folder not found — see Preferences" }
-        return "Press Start to launch the server."
+        if !config.repoExists {
+            return L.t("⚠︎ Project folder not found — see Preferences",
+                       "⚠︎ 未找到项目目录 —— 请查看偏好设置")
+        }
+        return L.t("Press Start to launch the server.", "点击“启动”来运行服务器。")
     }
 
     /// Re-read server state. Cheap (one lsof), so it is safe to poll.
@@ -422,12 +550,12 @@ final class LauncherController {
 
     func start(completion: ((Bool) -> Void)? = nil) {
         guard config.repoExists else {
-            Alerts.warn("Project folder not found:\n\(config.repo)",
-                        detail: "Set the correct path in Preferences (⌘,).")
+            Alerts.warn(L.t("Project folder not found:\n\(config.repo)", "未找到项目目录：\n\(config.repo)"),
+                        detail: L.t("Set the correct path in Preferences (⌘,).", "请在偏好设置（⌘,）中填写正确的路径。"))
             completion?(false)
             return
         }
-        setBusy(true, "Starting…")
+        setBusy(true, L.t("Starting…", "正在启动…"))
         let cfg = config
         // Who was already on the port? If the same PID is still there after our
         // launch, our instance failed to bind (EADDRINUSE) and "the port is
@@ -460,17 +588,17 @@ final class LauncherController {
                     // Never throw away someone else's running server: reuse it,
                     // and say so instead of pretending we started ours.
                     let detail = tail.isEmpty
-                        ? "Another server is already on port \(cfg.port) (PID \(beforePID ?? "?")).\n\nFull log: \(cfg.logFile)"
-                        : "\(tail)\n\nAnother server is already on port \(cfg.port). It is left running."
-                    Alerts.warn("Port \(cfg.port) is already in use.", detail: detail)
+                        ? L.t("Another server is already on port \(cfg.port) (PID \(beforePID ?? "?")).\n\nFull log: \(cfg.logFile)", "端口 \(cfg.port) 上已有另一个服务器（PID \(beforePID ?? "?")）。\n\n完整日志：\(cfg.logFile)")
+                        : L.t("\(tail)\n\nAnother server is already on port \(cfg.port). It is left running.", "\(tail)\n\n端口 \(cfg.port) 上已有另一个服务器，它会继续运行。")
+                    Alerts.warn(L.t("Port \(cfg.port) is already in use.", "端口 \(cfg.port) 已被占用。"), detail: detail)
                 } else if !ready {
                     // Show what the server actually printed. A bare "timed out"
                     // hides the real cause, which is usually one clear line
                     // (a missing toolchain, a port clash, a bad command).
                     let detail = tail.isEmpty
-                        ? "Nothing was logged.\nCheck: \(cfg.logFile)"
-                        : "\(tail)\n\nFull log: \(cfg.logFile)"
-                    Alerts.warn("The server did not start.", detail: detail)
+                        ? L.t("Nothing was logged.\nCheck: \(cfg.logFile)", "没有任何日志输出。\n请检查：\(cfg.logFile)")
+                        : L.t("\(tail)\n\nFull log: \(cfg.logFile)", "\(tail)\n\n完整日志：\(cfg.logFile)")
+                    Alerts.warn(L.t("The server did not start.", "服务器未能启动。"), detail: detail)
                 }
                 completion?(actuallyStarted)
                 // Launch the browser after the UI has settled, off the main
@@ -487,7 +615,7 @@ final class LauncherController {
 
     func restart() {
         guard let pid = runningPID ?? Server.listenerPID(port: config.port) else { refresh(); return }
-        setBusy(true, "Restarting…")
+        setBusy(true, L.t("Restarting…", "正在重启…"))
         let cfg = config
         DispatchQueue.global().async {
             Server.stop(pid: pid, port: cfg.port)
@@ -502,17 +630,17 @@ final class LauncherController {
         if confirm {
             // A running server may be hosting live sessions — never stop silently.
             let alert = NSAlert()
-            alert.messageText = "Stop the server?"
-            alert.informativeText = "PID \(pid) will be terminated.\n"
-                + "Anything connected in the browser will disconnect."
+            alert.messageText = L.t("Stop the server?", "要停止服务器吗？")
+            alert.informativeText = L.t("PID \(pid) will be terminated.\n", "将终止进程 PID \(pid)。\n")
+                + L.t("Anything connected in the browser will disconnect.", "浏览器中所有已连接的会话都会断开。")
             alert.alertStyle = .warning
-            alert.addButton(withTitle: "Stop Server")
-            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: L.t("Stop Server", "停止服务器"))
+            alert.addButton(withTitle: L.t("Cancel", "取消"))
             NSApp.activate(ignoringOtherApps: true)
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
 
-        setBusy(true, "Stopping…")
+        setBusy(true, L.t("Stopping…", "正在停止…"))
         let cfg = config
         DispatchQueue.global().async {
             let ok = Server.stop(pid: pid, port: cfg.port)
@@ -521,8 +649,8 @@ final class LauncherController {
                 self.setBusy(false)
                 self.refresh()
                 if !ok {
-                    Alerts.warn("Could not stop PID \(pid).",
-                                detail: "Try again, or stop it from a terminal.")
+                    Alerts.warn(L.t("Could not stop PID \(pid).", "无法停止进程 PID \(pid)。"),
+                                detail: L.t("Try again, or stop it from a terminal.", "请重试，或从终端手动停止。"))
                 }
             }
         }
@@ -716,6 +844,10 @@ final class LauncherWindow: NSWindow {
 
         buildLayout()
         controller.addObserver { [weak self] in self?.render() }
+        controller.addRelabeler { [weak self] in
+            self?.applyLabels()
+            self?.render()
+        }
         render()
     }
 
@@ -757,20 +889,31 @@ final class LauncherWindow: NSWindow {
             content.addSubview(b)
         }
 
-        style(startButton, "Start Server", 24, 200, key: "\r")
+        style(startButton, "", 24, 200, key: "\r")
         startButton.action = #selector(startTapped)
-        style(openButton, "Open in Browser", 24, 190, key: "\r")
+        style(openButton, "", 24, 190, key: "\r")
         openButton.action = #selector(openTapped)
-        style(restartButton, "Restart", 222, 106)
+        style(restartButton, "", 222, 106)
         restartButton.action = #selector(restartTapped)
-        style(stopButton, "Stop Server", 336, 110)
+        style(stopButton, "", 336, 110)
         stopButton.action = #selector(stopTapped)
+        // Titles come from one place, so a language change re-applies them all.
+        applyLabels()
 
         hint.font = .systemFont(ofSize: 10)
         hint.textColor = .tertiaryLabelColor
         hint.frame = NSRect(x: 24, y: 34, width: 420, height: 14)
         hint.lineBreakMode = .byTruncatingMiddle
         content.addSubview(hint)
+    }
+
+    /// Set every fixed title from the active language. Called once at build
+    /// time and again whenever Preferences changes the language.
+    func applyLabels() {
+        startButton.title   = L.t("Start Server", "启动服务器")
+        openButton.title    = L.t("Open in Browser", "在浏览器中打开")
+        restartButton.title = L.t("Restart", "重启")
+        stopButton.title    = L.t("Stop Server", "停止服务器")
     }
 
     func render() {
@@ -780,7 +923,7 @@ final class LauncherWindow: NSWindow {
         statusDot.stringValue = c.busy ? "🟡" : (running ? "🟢" : "⚪️")
         statusLine.stringValue = c.statusText
         detailLine.stringValue = c.detailText
-        hint.stringValue = "Port \(c.config.port) · \(c.config.logFile)"
+        hint.stringValue = L.t("Port \(c.config.port) · \(c.config.logFile)", "端口 \(c.config.port) · \(c.config.logFile)")
 
         c.busy ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
 
@@ -809,30 +952,49 @@ enum PreferencesPanel {
         let config = controller.config
 
         let alert = NSAlert()
-        alert.messageText = "Preferences"
-        alert.informativeText = "Settings are stored in:\n\(Config.configURL.path)"
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Reveal Config File")
+        alert.messageText = L.t("Preferences", "偏好设置")
+        alert.informativeText = L.t("Settings are stored in:\n\(Config.configURL.path)",
+                                    "设置保存在：\n\(Config.configURL.path)")
+        alert.addButton(withTitle: L.t("Save", "保存"))
+        alert.addButton(withTitle: L.t("Cancel", "取消"))
+        alert.addButton(withTitle: L.t("Reveal Config File", "在访达中显示配置文件"))
 
-        let form = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 132))
-        func field(_ label: String, _ value: String, _ y: CGFloat) -> NSTextField {
-            let l = NSTextField(labelWithString: label)
+        // One extra row (language) over the previous four-field form.
+        let form = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 160))
+        func label(_ text: String, _ y: CGFloat) {
+            let l = NSTextField(labelWithString: text)
             l.font = .systemFont(ofSize: 11)
             l.alignment = .right
             l.frame = NSRect(x: 0, y: y + 3, width: 76, height: 16)
             form.addSubview(l)
+        }
+        func field(_ text: String, _ value: String, _ y: CGFloat) -> NSTextField {
+            label(text, y)
             let f = NSTextField(string: value)
             f.frame = NSRect(x: 84, y: y, width: 292, height: 22)
             f.font = .systemFont(ofSize: 11)
             form.addSubview(f)
             return f
         }
-        let repoField    = field("Project:", config.repo, 106)
-        let commandField = field("Command:", config.command, 78)
-        let portField    = field("Port:", config.port, 50)
-        let browserField = field("Browser:", config.browser, 22)
-        let note = NSTextField(labelWithString: "Use {port} in the command. Empty browser = system default.")
+        let repoField    = field(L.t("Project:", "项目目录："), config.repo, 134)
+        let commandField = field(L.t("Command:", "启动命令："), config.command, 106)
+        let portField    = field(L.t("Port:", "端口："), config.port, 78)
+        let browserField = field(L.t("Browser:", "浏览器："), config.browser, 50)
+
+        // Language is a fixed set, so it is a popup rather than a text field:
+        // a typo in a free-text locale code is a silently unusable interface.
+        label(L.t("Language:", "界面语言："), 22)
+        let languagePopup = NSPopUpButton(frame: NSRect(x: 82, y: 20, width: 160, height: 25))
+        languagePopup.font = .systemFont(ofSize: 11)
+        for language in Language.allCases {
+            languagePopup.addItem(withTitle: language.displayName)
+        }
+        languagePopup.selectItem(at: Language.allCases.firstIndex(of: config.resolvedLanguage) ?? 0)
+        form.addSubview(languagePopup)
+
+        let note = NSTextField(labelWithString: L.t(
+            "Use {port} in the command. Empty browser = system default.",
+            "命令中用 {port} 代表端口。浏览器留空则使用系统默认。"))
         note.font = .systemFont(ofSize: 9)
         note.textColor = .tertiaryLabelColor
         note.frame = NSRect(x: 84, y: 2, width: 292, height: 14)
@@ -852,8 +1014,14 @@ enum PreferencesPanel {
         updated.command = commandField.stringValue.trimmingCharacters(in: .whitespaces)
         updated.port = portField.stringValue.trimmingCharacters(in: .whitespaces)
         updated.browser = browserField.stringValue.trimmingCharacters(in: .whitespaces)
+        let chosen = Language.allCases[max(0, languagePopup.indexOfSelectedItem)]
+        updated.language = chosen
         updated.save()
         controller.config = updated
+        // Apply immediately. Titles are read when a view renders, so the menu
+        // and panel pick the new language up on the refresh below — no relaunch.
+        L.current = chosen
+        controller.relabel()
         controller.refresh()
     }
 }
@@ -916,19 +1084,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         }
 
         if controller.isRunning {
-            add("Open in Browser", #selector(menuOpen), "o")
-            add("Restart Server", #selector(menuRestart), "r")
-            add("Stop Server…", #selector(menuStop))
+            add(L.t("Open in Browser", "在浏览器中打开"), #selector(menuOpen), "o")
+            add(L.t("Restart Server", "重启服务器"), #selector(menuRestart), "r")
+            add(L.t("Stop Server…", "停止服务器…"), #selector(menuStop))
         } else {
-            add("Start Server", #selector(menuStart), "s", enabled: controller.config.repoExists)
+            add(L.t("Start Server", "启动服务器"), #selector(menuStart), "s", enabled: controller.config.repoExists)
         }
 
         menu.addItem(.separator())
-        add("Show Panel", #selector(menuShowPanel))
-        add("Open Log", #selector(menuOpenLog), "l")
-        add("Preferences…", #selector(menuPreferences), ",")
+        add(L.t("Show Panel", "显示面板"), #selector(menuShowPanel))
+        add(L.t("Open Log", "打开日志"), #selector(menuOpenLog), "l")
+        add(L.t("Preferences…", "偏好设置…"), #selector(menuPreferences), ",")
         menu.addItem(.separator())
-        add("Quit DSH Launcher", #selector(menuQuit), "q")
+        add(L.t("Quit DSH Launcher", "退出 DSH Launcher"), #selector(menuQuit), "q")
     }
 
     @objc private func menuStart()   { controller.start() }

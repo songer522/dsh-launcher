@@ -2,6 +2,13 @@
 
 > **简体中文** · [English](README.md)
 
+> [!IMPORTANT]
+> **从插件市场过来的？这个插件属于一个 macOS 应用。**
+> 它单独运行时只会写一个描述当前服务器的小 JSON 文件 —— 这是刻意为之，它也只做这件事。
+> 你真正要用的是一个 **macOS 菜单栏应用**，用本仓库的 `./build.sh` 构建。
+> 请先安装应用，见[安装](#安装)。
+> 不用 macOS？插件本身在哪都能跑，但没有那个应用，这里的东西对你没有用处。
+
 一个极简的 macOS **菜单栏** 工具，用来管理本地开发服务器：启动、在浏览器中打开、重启或停止 —— 全程无需碰终端。
 
 它常驻在状态栏里，没有 Dock 图标，不会打扰你。
@@ -141,7 +148,8 @@ cat ~/.config/dsh-launcher/runtime.json
   "command": "pnpm dsh web --no-open --port {port}",
   "port": "3080",
   "browser": "Google Chrome",
-  "logFile": "/tmp/dsh-web.log"
+  "logFile": "/tmp/dsh-web.log",
+  "language": "system"
 }
 ```
 
@@ -152,8 +160,18 @@ cat ~/.config/dsh-launcher/runtime.json
 | `port` | 要监听的端口，并替换到命令中 |
 | `browser` | 要打开的应用名称，或 `""` 表示系统默认浏览器 |
 | `logFile` | 服务器 stdout/stderr 的写入位置 |
+| `language` | 界面语言：`system`、`en` 或 `zh-Hans` |
 
 因为它本质上只是“目录 + 命令”，所以它也能轻松运行 `npm run dev`、`vite`、`python -m http.server` 或任何其它东西。
+
+### 界面语言
+
+界面提供 **English** 与 **简体中文** 两种语言，在**偏好设置（⌘,）→ 界面语言**中选择，
+切换后立即生效，无需重启应用。
+
+默认的**跟随系统**会跟随 macOS：系统首选语言是中文时显示中文，否则显示英文。之所以还
+提供两个明确选项，是因为“让某一个应用用与系统不同的语言”在开发者中相当常见，值得单独
+做成一个设置。
 
 ### 为什么启动标志很关键
 

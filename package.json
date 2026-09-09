@@ -1,6 +1,6 @@
 {
   "name": "dsh-menubar-launcher",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Host plugin for DSH Launcher: publishes the running server's port, PID and tokenized URL as a runtime descriptor.",
   "type": "module",
   "main": "index.js",
