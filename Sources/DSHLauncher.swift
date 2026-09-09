@@ -83,6 +83,12 @@ enum Tools {
 // MARK: - Shell
 
 enum Shell {
+    /// Run a command and return its stdout.
+    ///
+    /// Only for commands that **exit on their own** — `lsof`, `ps`, `kill`,
+    /// `open`. Reading to end-of-file waits for the write end of the pipe to
+    /// close, and every process holding that descriptor must exit first. Use
+    /// `launch` for anything that leaves a process behind.
     @discardableResult
     static func run(_ command: String) -> String {
         let task = Process()
@@ -96,6 +102,34 @@ enum Shell {
         task.waitUntilExit()
         return String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Start a command that outlives this call, capturing nothing.
+    ///
+    /// `run` cannot do this. It reads the child's stdout to EOF, and EOF
+    /// arrives only when *every* holder of that pipe's write end has closed
+    /// it — including the long-lived server the command backgrounds, which
+    /// inherits the descriptor. The `sh` we spawned exits immediately, but the
+    /// read blocks for as long as the server runs, so `run` would return only
+    /// when the server stops. That deadlock is what pinned the UI on
+    /// "Starting…" forever: the code after the launch never executed.
+    ///
+    /// Giving the child no pipes at all removes the descriptor to wait on. The
+    /// command redirects its own output to the log file, so nothing is lost.
+    static func launch(_ command: String) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", command]
+        // Not a Pipe: /dev/null is a plain file, so no descriptor of ours
+        // survives into the server, and there is nothing to read to EOF.
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        task.standardInput = FileHandle.nullDevice
+        do { try task.run() } catch { return }
+        // Reap the short-lived `sh` so it does not linger as a zombie. It exits
+        // as soon as it has backgrounded the server, so this does not wait on
+        // the server itself.
+        task.waitUntilExit()
     }
 }
 
@@ -315,7 +349,11 @@ enum Server {
 
         // Truncate the log per run: it is parsed below for this run's URL, and
         // stale content would yield a stale (invalid) token.
-        Shell.run("cd '\(config.repo)' && "
+        //
+        // `launch`, not `run`: the server this backgrounds outlives the call,
+        // and `run` would wait on a pipe that server keeps open — see
+        // Shell.launch for why that hung the UI on "Starting…".
+        Shell.launch("cd '\(config.repo)' && "
             + "PATH='\(extraPath)':\"$PATH\" /usr/bin/nohup /bin/sh -c '\(command)' "
             + "> '\(log)' 2>&1 &")
     }

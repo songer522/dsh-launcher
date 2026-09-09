@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] — 2026-09-09
+
+### Fixed
+
+- **Starting a server on a free port left the UI stuck on "Starting…" forever.**
+  Reproducible from cold: stop the server, quit the app, relaunch, press Start.
+  The server came up correctly, but neither the menu bar nor the panel ever left
+  the busy state, and no alert appeared.
+
+  `Shell.run` reads the child's stdout to end-of-file, and EOF arrives only once
+  every process holding that pipe's write end has closed it. The launch command
+  backgrounds a long-lived server which inherits that descriptor, so the read
+  blocked for as long as the server ran — the `sh` we spawned had already
+  exited, and the code after the launch (`setBusy(false)`, the alerts, the
+  browser handoff) never executed. A `sample` of the blocked process shows it
+  parked in `Shell.run` → `readDataOfLength` → `read`.
+
+  This only ever showed up on a **free** port, which is why it survived earlier
+  testing: with a server already listening, the new instance died of
+  `EADDRINUSE` within seconds, closing the pipe and letting the read return.
+  What 1.2.1 fixed was the state-machine logic in that occupied-port case, not
+  this deadlock underneath it.
+
+  Server launches now use `Shell.launch`, which gives the child no pipes at all,
+  so there is no descriptor left to wait on. The command's own `> log` redirect
+  is untouched, so the log, the tokenized URL, and the `EADDRINUSE` diagnostics
+  all still reach the UI.
+
 ## [1.4.0] — 2026-09-09
 
 ### Added
