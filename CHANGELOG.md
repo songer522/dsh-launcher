@@ -5,6 +5,38 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.2] — 2026-09-11
+
+### Fixed
+
+- **A server that crashed during startup was reported as a port collision.**
+  Pressing Start with nothing on port 3080 could still raise "Port 3080 is
+  already in use — another server is already on port 3080. It is left running",
+  naming `PID ?`. No such process existed, and the port was free the moment the
+  alert appeared.
+
+  DSH binds the port early in boot and loads its plugin tree afterwards, so a
+  failure in that tree (missing client bundles, say) kills a process that has
+  already bound. `waitUntilReady` saw the port open, and one second later it was
+  gone again. The check treated "nobody on the port now" as identical to "the
+  incumbent still holds it" and reported a collision — which is impossible by
+  definition when nothing was listening beforehand.
+
+  The before/after PIDs now resolve through a pure `Server.startOutcome`, which
+  separates `.diedAfterBinding` from `.portTaken`. A server that bound and then
+  exited gets its own headline, "The server started, then exited" — "did not
+  start" reads like it never ran at all.
+
+- **Failure alerts showed the least useful six lines of the log.** The excerpt
+  came from `logTail`, but a Node crash dump ends in closing braces, an
+  `AggregateError` tail and a version banner, so the alert read `}` / `}` /
+  `Node.js v26.8.1` / `[ELIFECYCLE] Command failed with exit code 1` — four
+  lines that name no cause. The one line that does sits at the top, sometimes
+  hundreds of lines up. Alerts now lead with the first line that *opens* an
+  error report, plus the indented detail beneath it. Logs with no recognisable
+  error still fall back to the tail, where the most recent output is genuinely
+  the informative part.
+
 ## [1.4.1] — 2026-09-09
 
 ### Fixed

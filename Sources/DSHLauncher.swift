@@ -446,6 +446,39 @@ enum Server {
         return text.split(separator: "\n").suffix(lines).joined(separator: "\n")
     }
 
+    /// Does this line open an error report, rather than merely mention one?
+    ///
+    /// Anchored on purpose. The line that *throws* (`throw new Error(...)`) and
+    /// the frames below it both contain the word, but only the reported error
+    /// begins with it — matching loosely lands on the throw site and spends the
+    /// excerpt on source context instead of the message.
+    static func opensAnError(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.range(of: "^[A-Za-z]*(Error|Exception)\\b", options: .regularExpression) != nil { return true }
+        let lower = t.lowercased()
+        return ["error:", "fatal", "failed to", "err!", "panic:", "uncaught "]
+            .contains { lower.hasPrefix($0) }
+    }
+
+    /// The first error in the log, plus a little context — the part worth
+    /// showing when a run fails.
+    ///
+    /// A Node crash dump ends in closing braces, an `AggregateError` tail and a
+    /// version banner, so the *last* few lines of a failed run say nothing at
+    /// all. The single line that names the cause sits at the top, often
+    /// hundreds of lines up, with the detail (which packages, which paths)
+    /// indented beneath it. Falls back to the tail for a log with no
+    /// recognisable error — a server that hung rather than threw, where the
+    /// most recent output really is the informative part.
+    static func logExcerpt(config: Config, lines: Int = 6) -> String {
+        guard let text = try? String(contentsOfFile: config.logFile, encoding: .utf8) else { return "" }
+        let all = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let start = all.firstIndex(where: opensAnError) else {
+            return logTail(config: config, lines: lines)
+        }
+        return all[start..<min(start + lines, all.count)].joined(separator: "\n")
+    }
+
     /// Wait for the port to accept connections. Returns false on timeout.
     static func waitUntilReady(port: String, timeout: TimeInterval = 40) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
@@ -454,6 +487,29 @@ enum Server {
             Thread.sleep(forTimeInterval: 0.4)
         }
         return false
+    }
+
+    /// What a start attempt actually did, read off the port's owner before and
+    /// after the launch.
+    enum StartOutcome {
+        case started            // a new PID owns the port
+        case portTaken          // the incumbent still owns it; we never bound
+        case diedAfterBinding   // we bound, then the process exited
+        case neverBound         // the port never opened at all
+    }
+
+    /// Kept pure so the truth table can be exercised without launching a server.
+    ///
+    /// The subtle case is `after == nil` *after* the port was seen open: that is
+    /// our own server binding and then dying during startup (a failed plugin
+    /// load, say), not a collision. Reporting it as "another server is already
+    /// on the port" sends people hunting for a process that was never there,
+    /// and hides the real error sitting in the log. Note that a collision is
+    /// impossible by definition when `before` is nil.
+    static func startOutcome(before: String?, after: String?, everListened: Bool) -> StartOutcome {
+        guard everListened else { return .neverBound }
+        guard let after else { return .diedAfterBinding }
+        return after == before ? .portTaken : .started
     }
 
     /// Graceful TERM, escalating to KILL only if the port stays bound.
@@ -602,41 +658,44 @@ final class LauncherController {
         let beforePID = Server.listenerPID(port: cfg.port)
         DispatchQueue.global().async {
             Server.start(config: cfg)
-            let ready = Server.waitUntilReady(port: cfg.port)
-            var actuallyStarted = false
-            var bindFailure = false
-            if ready {
+            let everListened = Server.waitUntilReady(port: cfg.port)
+            var afterPID: String? = nil
+            if everListened {
                 Thread.sleep(forTimeInterval: 1.0)   // let it finish binding + print
-                let afterPID = Server.listenerPID(port: cfg.port)
-                if let after = afterPID, after != beforePID {
-                    actuallyStarted = true
-                } else {
-                    // Same PID before and after, or nothing at all: our process
-                    // never won the port. The other server (if any) is still up.
-                    bindFailure = true
-                }
+                afterPID = Server.listenerPID(port: cfg.port)
             }
+            let outcome = Server.startOutcome(before: beforePID,
+                                              after: afterPID,
+                                              everListened: everListened)
+            let actuallyStarted = outcome == .started
             self.refresh()
-            let tail = ready && !bindFailure ? "" : Server.logTail(config: cfg)
-            let openIt = ready && !bindFailure
+            let tail = actuallyStarted ? "" : Server.logExcerpt(config: cfg)
+            let openIt = actuallyStarted
             DispatchQueue.main.async {
                 self.setBusy(false)
                 self.refresh()
-                if bindFailure {
+                if outcome == .portTaken {
                     // Never throw away someone else's running server: reuse it,
                     // and say so instead of pretending we started ours.
+                    // `beforePID` is non-nil here: .portTaken requires it.
                     let detail = tail.isEmpty
                         ? L.t("Another server is already on port \(cfg.port) (PID \(beforePID ?? "?")).\n\nFull log: \(cfg.logFile)", "端口 \(cfg.port) 上已有另一个服务器（PID \(beforePID ?? "?")）。\n\n完整日志：\(cfg.logFile)")
                         : L.t("\(tail)\n\nAnother server is already on port \(cfg.port). It is left running.", "\(tail)\n\n端口 \(cfg.port) 上已有另一个服务器，它会继续运行。")
                     Alerts.warn(L.t("Port \(cfg.port) is already in use.", "端口 \(cfg.port) 已被占用。"), detail: detail)
-                } else if !ready {
+                } else if !actuallyStarted {
                     // Show what the server actually printed. A bare "timed out"
                     // hides the real cause, which is usually one clear line
                     // (a missing toolchain, a port clash, a bad command).
                     let detail = tail.isEmpty
                         ? L.t("Nothing was logged.\nCheck: \(cfg.logFile)", "没有任何日志输出。\n请检查：\(cfg.logFile)")
                         : L.t("\(tail)\n\nFull log: \(cfg.logFile)", "\(tail)\n\n完整日志：\(cfg.logFile)")
-                    Alerts.warn(L.t("The server did not start.", "服务器未能启动。"), detail: detail)
+                    // Separate headline for a server that bound the port and
+                    // then exited: "did not start" reads like it never ran, and
+                    // the port is already free again by the time this shows.
+                    let title = outcome == .diedAfterBinding
+                        ? L.t("The server started, then exited.", "服务器启动后随即退出。")
+                        : L.t("The server did not start.", "服务器未能启动。")
+                    Alerts.warn(title, detail: detail)
                 }
                 completion?(actuallyStarted)
                 // Launch the browser after the UI has settled, off the main
